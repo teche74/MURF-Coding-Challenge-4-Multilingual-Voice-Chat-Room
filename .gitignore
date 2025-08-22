@@ -1,0 +1,20 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+.env
+venv/
+ENV/
+Scripts/
+Lib/
+Include/
+
+# IDE stuff
+.vscode/
+.idea/
+
+# Streamlit cache
+.streamlit/
