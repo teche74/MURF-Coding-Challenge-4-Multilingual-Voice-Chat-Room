@@ -1,6 +1,6 @@
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
@@ -9,8 +9,9 @@ from starlette.responses import RedirectResponse
 import random, string, logging, os, sys, asyncio, time
 from typing import Dict, Optional, Tuple
 from dotenv import load_dotenv
-# from speech_to_text_and_translation_utils import speech_to_text, translate_text
-# from murf_api import generate_speech_from_text
+from speech_to_text_and_translation_utils import speech_to_text, translate_text
+from murf_api import generate_speech_from_text
+
 
 sys.path.append(os.path.dirname(__file__))
 
@@ -152,3 +153,80 @@ async def transcribe_audio(file: UploadFile = File(...), target_lang: str = "en"
     import base64
     tts_base64 = base64.b64encode(tts_audio).decode("utf-8")
     return {"text": translated_text, "tts_audio_base64": tts_base64}
+
+class WSRoomManager:
+    def __init__(self):
+        self.rooms_ws: Dict[str, Dict[str, WebSocket]] = {}
+
+    async def connect(self, room_code: str, user_id: str, ws: WebSocket):
+        await ws.accept()
+        self.rooms_ws.setdefault(room_code, {})
+        self.rooms_ws[room_code][user_id] = ws
+        logger.info(f"WS connect {user_id} -> {room_code} (total {len(self.rooms_ws[room_code])})")
+
+    def disconnect(self, room_code: str, user_id: str):
+        if room_code in self.rooms_ws:
+            self.rooms_ws[room_code].pop(user_id, None)
+            if not self.rooms_ws[room_code]:
+                self.rooms_ws.pop(room_code, None)
+        logger.info(f"WS disconnect {user_id} from {room_code}")
+
+    async def peers_in_room(self, room_code: str, exclude: str = "") -> Dict[str, WebSocket]:
+        return {uid: sock for uid, sock in self.rooms_ws.get(room_code, {}).items() if uid != exclude}
+
+    async def send_json(self, ws: WebSocket, payload: dict):
+        await ws.send_json(payload)
+
+    async def relay(self, room_code: str, target_user: str, payload: dict):
+        target_ws = self.rooms_ws.get(room_code, {}).get(target_user)
+        if target_ws:
+            await target_ws.send_json(payload)
+
+ws_manager = WSRoomManager()
+
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WebSocket):
+    room_code = websocket.query_params.get("room_code")
+    user_id = websocket.query_params.get("user_id")
+
+    if not room_code or not user_id:
+        await websocket.close()
+        return
+
+    room = rooms.get(room_code)
+    if not room or user_id not in room["members"]:
+        await websocket.close()
+        return
+
+    await ws_manager.connect(room_code, user_id, websocket)
+
+    peers = list((await ws_manager.peers_in_room(room_code, exclude=user_id)).keys())
+    await ws_manager.send_json(websocket, {"type": "peers", "peers": peers})
+
+    for peer_id, peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).items():
+        try:
+            await ws_manager.send_json(peer_ws, {"type": "peer-joined", "user_id": user_id})
+        except:
+            pass
+
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            mtype = msg.get("type")
+            to_user = msg.get("to")
+            data = msg.get("data", {})
+            if mtype in ("offer", "answer", "ice-candidate") and to_user:
+                await ws_manager.relay(room_code, to_user, {
+                    "type": mtype,
+                    "from": user_id,
+                    "data": data
+                })
+    except WebSocketDisconnect:
+        pass
+    finally:
+        for peer_id, peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).items():
+            try:
+                await ws_manager.send_json(peer_ws, {"type": "peer-left", "user_id": user_id})
+            except:
+                pass
+        ws_manager.disconnect(room_code, user_id)
