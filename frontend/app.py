@@ -10,24 +10,28 @@ def local_css():
     st.markdown(
         """
         <style>
-        body {
-            background-color: #f4f7fb;
-        }
+        /* Dark gradient background */
         .stApp {
-            background: linear-gradient(to right, #f9f9f9, #eef3f9);
+            background: linear-gradient(to right, #0f0f0f, #1c1c1c, #2b2b2b);
         }
+
+        /* Title: White and bold */
         .title {
             font-size: 2.2rem;
             font-weight: bold;
-            color: #1a73e8;
+            color: #ffffff;
             text-align: center;
             margin-bottom: 20px;
         }
+
+        /* Subheader: softer white/grey */
         .subheader {
             font-size: 1.4rem;
-            color: #333;
+            color: #e0e0e0;
             margin-top: 10px;
         }
+
+        /* Buttons: white text on dark blue */
         .stButton>button {
             background: #1a73e8;
             color: white;
@@ -37,18 +41,23 @@ def local_css():
             transition: all 0.3s ease;
         }
         .stButton>button:hover {
-            background: #1558b0;
+            background: #0f5bd1;
             transform: scale(1.05);
         }
+
+        /* Room container: dark card style */
         .room-box {
             padding: 20px;
             border-radius: 15px;
-            background: white;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+            background: #121212;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
             margin: 20px 0;
+            color: #f5f5f5;
         }
+
+        /* Success text in light green */
         .success {
-            color: green;
+            color: #4caf50;
             font-weight: bold;
         }
         </style>
