@@ -4,7 +4,7 @@ import requests
 
 class AudioCallApp:
     def __init__(self):
-        self.backend_url = "https://chatfree.streamlit.app/"
+        self.backend_url = "https://murf-coding-challenge-4-multilingual.onrender.com"
         self.muted = False
 
     def login(self):
