@@ -30,7 +30,8 @@ oauth.register(
     client_secret=CLIENT_SECRET,
     jwks_uri='https://www.googleapis.com/oauth2/v3/certs',
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={'scope': 'email openid'}
+    client_kwargs={'scope': 'email openid'},
+    redirect_uri="https://murf-coding-challenge-4-multilingual.onrender.com"
 )
 
 users: Dict[str, Dict] = {}
