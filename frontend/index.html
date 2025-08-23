@@ -269,6 +269,13 @@
     </div>
 
     <script>
+
+        window.APP_CONFIG = {
+            WS_URL: {{WS_URL}},
+            BACKEND_HTTP: {{BACKEND_HTTP}},
+            ROOM: {{ROOM}},
+            USER: {{USER}}
+        };
         const { WS_URL, BACKEND_HTTP, ROOM, USER } = window.APP_CONFIG;
 
         document.getElementById('roomName').innerText = ROOM;
