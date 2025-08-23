@@ -2,11 +2,10 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Voice Room</title>
     <style>
-        /* Global */
         body {
             margin: 0;
             font-family: 'Segoe UI', sans-serif;
@@ -16,30 +15,32 @@
             height: 100vh;
         }
 
-        /* App Layout */
         .app-container {
             display: flex;
             width: 100%;
         }
 
-        /* Sidebar */
         .sidebar {
             width: 250px;
             background: rgba(0, 0, 0, 0.5);
             border-right: 1px solid rgba(255, 255, 255, 0.1);
             padding: 20px;
             backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
         }
 
         .room-title {
             font-size: 18px;
             color: #0ff;
-            margin-bottom: 15px;
+            margin-bottom: 6px;
         }
 
         .participants-list {
             list-style: none;
             padding: 0;
+            margin: 0;
         }
 
         .participants-list li {
@@ -48,18 +49,27 @@
             background: rgba(255, 255, 255, 0.05);
             border-radius: 8px;
             font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
-        /* Main Area */
+        .me-badge {
+            background: #0ff;
+            color: #000;
+            font-size: 11px;
+            border-radius: 6px;
+            padding: 2px 6px;
+            margin-left: 8px;
+        }
+
         .main-content {
             flex: 1;
             display: flex;
             flex-direction: column;
-            justify-content: flex-start;
             padding: 20px;
         }
 
-        /* Status */
         .status-bar {
             text-align: center;
             margin-bottom: 15px;
@@ -67,7 +77,6 @@
             color: #0ff;
         }
 
-        /* User Grid */
         .user-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -97,7 +106,10 @@
             border-radius: 50%;
             background: rgba(255, 255, 255, 0.2);
             margin-bottom: 10px;
-            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
         }
 
         .user-card .username {
@@ -115,7 +127,6 @@
             background: rgba(255, 255, 255, 0.05);
         }
 
-        /* Controls */
         .controls {
             display: flex;
             justify-content: center;
@@ -147,7 +158,11 @@
             background: #d00030;
         }
 
-        /* Chat */
+        .control-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
         .chat-box {
             flex: 1;
             display: flex;
@@ -169,7 +184,7 @@
             padding: 8px 12px;
             background: rgba(255, 255, 255, 0.05);
             border-radius: 8px;
-            max-width: 80%;
+            max-width: 85%;
         }
 
         .message.me {
@@ -209,41 +224,11 @@
 <body>
     <div class="app-container">
         <aside class="sidebar">
-            <h2 class="room-title">Room: <span id="roomName"></span></h2>
-            <ul id="participants" class="participants-list"></ul>
-        </aside>
-
-        <main class="main-content">
-            
-            <div id="status" class="status-bar">Connecting...</div>
-
-            <div class="user-grid">
-                <div class="user-card empty" id="user1">
-                    <div class="avatar"></div>
-                    <div class="username">Empty</div>
-                </div>
-                <div class="user-card empty" id="user2">
-                    <div class="avatar"></div>
-                    <div class="username">Empty</div>
-                </div>
-                <div class="user-card empty" id="user3">
-                    <div class="avatar"></div>
-                    <div class="username">Empty</div>
-                </div>
-                <div class="user-card empty" id="user4">
-                    <div class="avatar"></div>
-                    <div class="username">Empty</div>
-                </div>
+            <div>
+                <h2 class="room-title">Room: <span id="roomName"></span></h2>
+                <ul id="participants" class="participants-list"></ul>
             </div>
 
-            <!-- Controls -->
-            <div class="controls">
-                <button id="muteBtn" class="control-btn">🔇 Mute</button>
-                <button id="unmuteBtn" class="control-btn">🎙️ Unmute</button>
-                <button id="leaveBtn" class="control-btn leave">❌ Leave</button>
-            </div>
-
-            <!-- Chat -->
             <div class="chat-box">
                 <div id="chat-messages" class="messages"></div>
                 <div class="chat-input">
@@ -251,183 +236,116 @@
                     <button id="sendBtn">➤</button>
                 </div>
             </div>
+        </aside>
+
+        <main class="main-content">
+            <div id="status" class="status-bar">Connecting...</div>
+
+            <div class="user-grid">
+                <div class="user-card empty" id="user1">
+                    <div class="avatar">🙂</div>
+                    <div class="username">Empty</div>
+                </div>
+                <div class="user-card empty" id="user2">
+                    <div class="avatar">🙂</div>
+                    <div class="username">Empty</div>
+                </div>
+                <div class="user-card empty" id="user3">
+                    <div class="avatar">🙂</div>
+                    <div class="username">Empty</div>
+                </div>
+                <div class="user-card empty" id="user4">
+                    <div class="avatar">🙂</div>
+                    <div class="username">Empty</div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <button id="muteBtn" class="control-btn" disabled>🔇 Mute</button>
+                <button id="unmuteBtn" class="control-btn" disabled>🎙️ Unmute</button>
+                <button id="leaveBtn" class="control-btn leave">❌ Leave</button>
+            </div>
         </main>
     </div>
 
-    <!-- Config injected by backend -->
     <script>
-        window.APP_CONFIG = {
-            WS_URL: {{ WS_URL }},
-        BACKEND_HTTP: {{ BACKEND_HTTP }},
-        ROOM: {{ ROOM }},
-        USER: {{ USER }}
-    };
-    
-    document.getElementById('roomName').innerText = window.APP_CONFIG.ROOM;
-        
-    // Load values injected in index.html
-
         const { WS_URL, BACKEND_HTTP, ROOM, USER } = window.APP_CONFIG;
+
+        document.getElementById('roomName').innerText = ROOM;
 
         let localStream = null;
         let ws = null;
-        const peers = new Map(); // userId -> RTCPeerConnection
-        const maxUsers = 4;
+        const peers = new Map();
         const userSlots = ["user1", "user2", "user3", "user4"];
-
-        // Map peerId to slot
         const peerSlotMap = new Map();
+        const participants = new Set();
 
-        async function initLocalMedia() {
-            try {
-                localStream = await navigator.mediaDevices.getUserMedia({
-                    audio: true,
-                    video: false,
-                });
-                document.getElementById("status").innerText = "Mic ready";
-            } catch (e) {
-                console.error("getUserMedia failed", e);
-                document.getElementById("status").innerText = "Mic access denied";
+        function updateParticipantsUI() {
+            const list = document.getElementById("participants");
+            list.innerHTML = "";
+            for (let uid of participants) {
+                const li = document.createElement("li");
+                const you = uid === USER ? '<span class="me-badge">You</span>' : '';
+                li.innerHTML = `<span>${uid}</span>${you}`;
+                list.appendChild(li);
             }
         }
 
-        function assignSlot(peerId, name) {
+        function assignSlot(userId, label) {
+            if (peerSlotMap.has(userId)) return peerSlotMap.get(userId);
             for (let slot of userSlots) {
                 const el = document.getElementById(slot);
                 if (el.classList.contains("empty")) {
                     el.classList.remove("empty");
-                    el.querySelector(".username").innerText = name;
-                    peerSlotMap.set(peerId, slot);
-                    break;
+                    el.querySelector(".username").innerText = label || userId;
+                    peerSlotMap.set(userId, slot);
+                    participants.add(userId);
+                    updateParticipantsUI();
+                    return slot;
                 }
             }
+            return null;
         }
 
-        function removeSlot(peerId) {
-            const slot = peerSlotMap.get(peerId);
+        function removeSlot(userId) {
+            const slot = peerSlotMap.get(userId);
             if (!slot) return;
             const el = document.getElementById(slot);
             el.classList.add("empty");
             el.classList.remove("speaking");
             el.querySelector(".username").innerText = "Empty";
-            peerSlotMap.delete(peerId);
+            peerSlotMap.delete(userId);
+            participants.delete(userId);
+            updateParticipantsUI();
         }
 
-        function markSpeaking(peerId, speaking) {
-            const slot = peerSlotMap.get(peerId);
-            if (!slot) return;
-            const el = document.getElementById(slot);
-            if (speaking) el.classList.add("speaking");
-            else el.classList.remove("speaking");
+        function addChatMessage(fromUser, text, isMe = false) {
+            const box = document.getElementById("chat-messages");
+            const div = document.createElement("div");
+            div.className = "message" + (isMe ? " me" : "");
+            const name = isMe ? "You" : fromUser;
+            div.innerHTML = `<strong>${name}:</strong> ${text}`;
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
         }
 
-        function createPeerConnection(peerId, peerName) {
-            const pc = new RTCPeerConnection({
-                iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-            });
+        async function initLocalMedia() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                document.getElementById("status").innerText = "Mic ready";
+                document.getElementById("muteBtn").disabled = false;
+                document.getElementById("unmuteBtn").disabled = false;
 
-            assignSlot(peerId, peerName);
-
-            // Add local audio
-            if (localStream && localStream.getAudioTracks().length > 0) {
-                pc.addTrack(localStream.getAudioTracks()[0], localStream);
-            }
-
-            // Play remote audio
-            pc.addEventListener("track", (ev) => {
-                const stream = ev.streams[0];
-                let audioEl = document.getElementById("audio-" + peerId);
-                if (!audioEl) {
-                    audioEl = document.createElement("audio");
-                    audioEl.id = "audio-" + peerId;
-                    audioEl.autoplay = true;
-                    audioEl.controls = false;
-                    audioEl.style.display = "none";
-                    document.body.appendChild(audioEl);
-
-                    // Visual speaking detection
-                    const audioCtx = new AudioContext();
-                    const analyser = audioCtx.createAnalyser();
-                    const source = audioCtx.createMediaStreamSource(stream);
-                    source.connect(analyser);
-                    const data = new Uint8Array(analyser.frequencyBinCount);
-
-                    function checkSpeaking() {
-                        analyser.getByteFrequencyData(data);
-                        const volume = data.reduce((a, b) => a + b) / data.length;
-                        markSpeaking(peerId, volume > 10); // Threshold for speaking
-                        requestAnimationFrame(checkSpeaking);
-                    }
-                    checkSpeaking();
-                }
-                audioEl.srcObject = stream;
-            });
-
-            pc.onicecandidate = (ev) => {
-                if (ev.candidate) {
-                    ws.send(
-                        JSON.stringify({
-                            type: "ice-candidate",
-                            to: peerId,
-                            data: ev.candidate,
-                        })
-                    );
-                }
-            };
-
-            pc.onconnectionstatechange = () => {
-                if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
-                    closePeer(peerId);
-                }
-            };
-
-            return pc;
-        }
-
-        async function makeOffer(peerId, peerName) {
-            const pc = createPeerConnection(peerId, peerName);
-            peers.set(peerId, pc);
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
-        }
-
-        async function handleOffer(fromId, offer, name) {
-            const pc = createPeerConnection(fromId, name);
-            peers.set(fromId, pc);
-            await pc.setRemoteDescription(new RTCSessionDescription(offer));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            ws.send(JSON.stringify({ type: "answer", to: fromId, data: answer }));
-        }
-
-        async function handleAnswer(fromId, answer) {
-            const pc = peers.get(fromId);
-            if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        }
-
-        async function handleCandidate(fromId, cand) {
-            const pc = peers.get(fromId);
-            if (pc) {
-                try {
-                    await pc.addIceCandidate(new RTCIceCandidate(cand));
-                } catch (e) {
-                    console.warn("Failed to add ICE candidate", e);
-                }
+                assignSlot(USER, `You (${USER})`);
+            } catch (e) {
+                document.getElementById("status").innerText = "Mic access denied";
             }
         }
 
         function closePeer(peerId) {
             const pc = peers.get(peerId);
             if (pc) {
-                pc.getSenders().forEach((s) => {
-                    try {
-                        pc.removeTrack(s);
-                    } catch (e) { }
-                });
-                try {
-                    pc.close();
-                } catch (e) { }
+                try { pc.close(); } catch { }
                 peers.delete(peerId);
             }
             const a = document.getElementById("audio-" + peerId);
@@ -439,61 +357,58 @@
             ws = new WebSocket(WS_URL);
 
             ws.onopen = () => {
-                document.getElementById("status").innerText = "Connected to signaling";
+                document.getElementById("status").innerText = "Connected";
+                assignSlot(USER, `You (${USER})`);
             };
 
             ws.onmessage = async (ev) => {
                 const msg = JSON.parse(ev.data);
-                if (msg.type === "peers") {
-                    for (const peer of msg.peers) {
-                        await makeOffer(peer.user_id, peer.name);
-                    }
-                } else if (msg.type === "peer-joined") {
-                    await makeOffer(msg.user_id, msg.name);
-                } else if (msg.type === "offer") {
-                    await handleOffer(msg.from, msg.data, msg.name);
-                } else if (msg.type === "answer") {
-                    await handleAnswer(msg.from, msg.data);
-                } else if (msg.type === "ice-candidate") {
-                    await handleCandidate(msg.from, msg.data);
+                if (msg.type === "chat") {
+                    addChatMessage(msg.user_id, msg.message, msg.user_id === USER);
                 } else if (msg.type === "peer-left") {
                     closePeer(msg.user_id);
                 }
             };
-
-            ws.onclose = () => {
-                document.getElementById("status").innerText = "Signaling disconnected";
-                for (const p of Array.from(peers.keys())) closePeer(p);
-            };
         }
 
-        // Controls
         document.getElementById("muteBtn").onclick = () => {
-            if (!localStream) return;
-            localStream.getAudioTracks().forEach((t) => (t.enabled = false));
+            localStream?.getAudioTracks().forEach(t => t.enabled = false);
             document.getElementById("status").innerText = "Muted";
         };
-
         document.getElementById("unmuteBtn").onclick = () => {
-            if (!localStream) return;
-            localStream.getAudioTracks().forEach((t) => (t.enabled = true));
+            localStream?.getAudioTracks().forEach(t => t.enabled = true);
             document.getElementById("status").innerText = "Unmuted";
         };
 
-        document.getElementById("leaveBtn").onclick = () => {
-            if (ws) ws.close();
-            if (localStream) localStream.getTracks().forEach((t) => t.stop());
-            document.getElementById("status").innerText = "Left call";
+        document.getElementById("leaveBtn").onclick = async () => {
+            try {
+                await fetch(BACKEND_HTTP + "/leave_room", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ user_id: USER, room_code: ROOM })
+                });
+            } catch { }
+            finally {
+                ws?.close();
+                localStream?.getTracks().forEach(t => t.stop());
+                window.location.href = "/";
+            }
         };
 
-        // Auto-start
+        document.getElementById("sendBtn").onclick = () => {
+            const input = document.getElementById("chatInput");
+            const text = input.value.trim();
+            if (!text || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: "chat", user_id: USER, room_code: ROOM, message: text }));
+            addChatMessage(USER, text, true);
+            input.value = "";
+        };
+
         (async () => {
             await initLocalMedia();
             await startWebSocket();
         })();
-
     </script>
-
 </body>
 
 </html>

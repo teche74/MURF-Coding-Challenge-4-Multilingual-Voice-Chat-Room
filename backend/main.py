@@ -6,7 +6,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
 from authlib.integrations.starlette_client import OAuth
 from starlette.responses import RedirectResponse
-import random, string, logging, os, sys, asyncio, time
+import random, string, logging, asyncio, time, base64
 from typing import Dict, Optional, Tuple
 from dotenv import load_dotenv
 from backend.speech_to_text_and_translation_utils import speech_to_text, translate_text
@@ -161,7 +161,6 @@ async def transcribe_audio(file: UploadFile = File(...), target_lang: str = "en"
     except Exception as e:
         logger.warning(f"TTS generation failed: {e}")
         tts_audio = b""
-    import base64
     tts_base64 = base64.b64encode(tts_audio).decode("utf-8")
     return {"text": translated_text, "tts_audio_base64": tts_base64}
 
@@ -215,7 +214,7 @@ async def ws_endpoint(websocket: WebSocket):
     peers_payload = [{"user_id": uid, "name": get_user_name(uid)} for uid in existing_peers]
     await ws_manager.send_json(websocket, {"type": "peers", "peers": peers_payload})
 
-    for peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).items():
+    for peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).values():
         try:
             await ws_manager.send_json(peer_ws, {
                 "type": "peer-joined",
@@ -231,6 +230,7 @@ async def ws_endpoint(websocket: WebSocket):
             mtype = msg.get("type")
             to_user = msg.get("to")
             data = msg.get("data", {})
+
             if mtype in ("offer", "answer", "ice-candidate") and to_user:
                 await ws_manager.relay(room_code, to_user, {
                     "type": mtype,
@@ -238,6 +238,21 @@ async def ws_endpoint(websocket: WebSocket):
                     "name": get_user_name(user_id),
                     "data": data
                 })
+
+            elif mtype == "chat":
+                text = msg.get("text", "")
+                broadcast_payload = {
+                    "type": "chat",
+                    "from": user_id,
+                    "name": get_user_name(user_id),
+                    "text": text
+                }
+                for peer_ws in (await ws_manager.peers_in_room(room_code, exclude="")).values():
+                    try:
+                        await ws_manager.send_json(peer_ws, broadcast_payload)
+                    except Exception:
+                        pass
+
     except WebSocketDisconnect:
         logger.info(f"Websocket disconnect for {user_id}")
     except Exception as e:
