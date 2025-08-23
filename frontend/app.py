@@ -1,8 +1,66 @@
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import requests
+import av
+import numpy as np
+import threading
+from collections import defaultdict, deque
+import random
+
+_ROOM_BUFFERS = defaultdict(list)  
+_ROOM_LOCK = threading.Lock()
+MAX_CHUNKS = 8  
+
+
+class RoomAudioMixer(AudioProcessorBase):
+    def __init__(self) -> None:
+        self.room_code = None
+        self.my_buf = deque(maxlen=MAX_CHUNKS)
+
+    def on_start(self):
+        self.room_code = st.session_state.get("room_code")
+        if not self.room_code:
+            return
+        with _ROOM_LOCK:
+            _ROOM_BUFFERS[self.room_code].append(self.my_buf)
+
+    def on_ended(self):
+        if not self.room_code:
+            return
+        with _ROOM_LOCK:
+            try:
+                _ROOM_BUFFERS[self.room_code].remove(self.my_buf)
+                if not _ROOM_BUFFERS[self.room_code]:
+                    del _ROOM_BUFFERS[self.room_code]
+            except ValueError:
+                pass
+
+    def recv_audio(self, frame: av.AudioFrame) -> av.AudioFrame:
+        pcm = frame.to_ndarray() 
+        if pcm.ndim == 2:
+            pcm = pcm.mean(axis=0, keepdims=True) 
+
+        pcm = pcm.astype(np.float32)
+        self.my_buf.append(pcm.copy())
+
+        with _ROOM_LOCK:
+            buffers = _ROOM_BUFFERS.get(self.room_code, [])
+            other_streams = [b[-1] for b in buffers if (b is not self.my_buf and len(b) > 0)]
+
+        if other_streams:
+            min_len = min(s.shape[-1] for s in other_streams)
+            stack = np.stack([s[..., :min_len] for s in other_streams], axis=0)
+            mixed = stack.mean(axis=0)
+        else:
+            mixed = np.zeros_like(pcm)
+
+        out = (mixed * 32767.0).clip(-32768, 32767).astype(np.int16)
+        out_frame = av.AudioFrame.from_ndarray(out, layout="mono")
+        out_frame.sample_rate = getattr(frame, "sample_rate", 48000)
+        return out_frame
+
 
 class AudioCallApp:
     def __init__(self):
@@ -59,96 +117,46 @@ class AudioCallApp:
                 st.error(f"Failed to join room: {resp.text}")
 
     def run_audio_call(self):
-        st.markdown(
-            """
-            <style>
-            .participant-card {
-                border: 2px solid #333;
-                border-radius: 16px;
-                padding: 20px;
-                margin: 10px;
-                background-color: #1e1e1e;
-                color: white;
-                text-align: center;
-                box-shadow: 0px 0px 8px rgba(0,0,0,0.4);
-                min-height: 150px;
-                transition: all 0.2s ease-in-out;
-            }
-            .active-speaker {
-                border: 2px solid #4CAF50 !important;
-                box-shadow: 0px 0px 20px #4CAF50;
-            }
-            .empty-slot {
-                border: 2px dashed #444;
-                border-radius: 16px;
-                padding: 20px;
-                margin: 10px;
-                color: #777;
-                text-align: center;
-                min-height: 150px;
-            }
-            audio, video {
-                display: none !important;
-            }
-            button[title="Stop"], button[title="Start"] {
-                display: none !important;
-            }
-            .stAudio, .stVideo, button[title="Start"], button[title="Stop"] {
-                display: none !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
-
         st.subheader("Audio Call Room 🎤")
         st.write(f"Room Code: {st.session_state['room_code']}")
 
-        # WebRTC audio-only
         webrtc_ctx = webrtc_streamer(
             key="audio_call",
             mode=WebRtcMode.SENDRECV,
             audio_receiver_size=1024,
-            sendback_audio=False,
+            sendback_audio=True, 
             media_stream_constraints={"audio": True, "video": False},
             rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
             video_html_attrs={"style": {"display": "none"}},
-            desired_playing_state=True
+            desired_playing_state=True,
+            audio_processor_factory=RoomAudioMixer, 
         )
 
-        # Controls
-        col1, col2, col3 = st.columns([1,1,1])
-
+        col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
             if st.button("🔇 Mute"):
                 if webrtc_ctx and webrtc_ctx.state.playing:
                     webrtc_ctx.audio_receiver_enabled = False
                     self.muted = True
-
         with col2:
             if st.button("🎙️ Unmute"):
                 if webrtc_ctx and webrtc_ctx.state.playing:
                     webrtc_ctx.audio_receiver_enabled = True
                     self.muted = False
-
         with col3:
             if st.button("❌ Leave Call"):
                 if "room_code" in st.session_state:
                     del st.session_state["room_code"]
                 st.rerun()
 
-        # Get members
         try:
             resp = requests.get(f"{self.backend_url}/room_info?room_code={st.session_state['room_code']}")
             members = resp.json().get("members", [])
         except Exception:
             members = []
 
-        # Simulated active speaker (you can replace with real audio-level detection later)
-        import random
         active_speaker = random.choice(members) if members else None
 
-        # WhatsApp-like grid
         st.markdown("### Participants")
         num_members = max(1, len(members))
         cols_per_row = 2 if num_members <= 4 else 4
@@ -180,6 +188,7 @@ class AudioCallApp:
                             "<div class='empty-slot'>Empty Slot</div>",
                             unsafe_allow_html=True
                         )
+
     def run(self):
         if "user_id" not in st.session_state:
             self.login()
