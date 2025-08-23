@@ -10,60 +10,78 @@ def local_css():
     st.markdown(
         """
         <style>
-        /* Dark gradient background */
+        /* Full background with animated gradient */
         .stApp {
-            background: linear-gradient(to right, #0f0f0f, #1c1c1c, #2b2b2b);
+            background: linear-gradient(-45deg, #0f0f0f, #1c1c1c, #2b2b2b, #121212);
+            background-size: 400% 400%;
+            animation: gradientBG 12s ease infinite;
+            color: white;
         }
 
-        /* Title: White and bold */
+        @keyframes gradientBG {
+            0% {background-position: 0% 50%;}
+            50% {background-position: 100% 50%;}
+            100% {background-position: 0% 50%;}
+        }
+
+        /* Title with glow */
         .title {
-            font-size: 2.2rem;
-            font-weight: bold;
-            color: #ffffff;
+            font-size: 2.5rem;
+            font-weight: 800;
             text-align: center;
-            margin-bottom: 20px;
+            margin-bottom: 25px;
+            color: #ffffff;
+            text-shadow: 0 0 15px rgba(0, 200, 255, 0.7),
+                         0 0 30px rgba(0, 200, 255, 0.5);
         }
 
-        /* Subheader: softer white/grey */
+        /* Subheader - sleek white with spacing */
         .subheader {
-            font-size: 1.4rem;
+            font-size: 1.5rem;
+            font-weight: 500;
             color: #e0e0e0;
-            margin-top: 10px;
+            margin: 15px 0;
+            text-align: center;
         }
 
-        /* Buttons: white text on dark blue */
+        /* Modern buttons */
         .stButton>button {
-            background: #1a73e8;
+            background: linear-gradient(90deg, #00c6ff, #0072ff);
             color: white;
             font-weight: 600;
-            border-radius: 10px;
-            padding: 0.6em 1.2em;
+            border-radius: 12px;
+            padding: 0.7em 1.5em;
+            border: none;
             transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 118, 255, 0.4);
         }
         .stButton>button:hover {
-            background: #0f5bd1;
-            transform: scale(1.05);
+            transform: scale(1.08);
+            box-shadow: 0 6px 20px rgba(0, 118, 255, 0.7);
         }
 
-        /* Room container: dark card style */
+        /* Room box - glowing card */
         .room-box {
-            padding: 20px;
+            padding: 25px;
             border-radius: 15px;
-            background: #121212;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
-            margin: 20px 0;
-            color: #f5f5f5;
+            background: rgba(30, 30, 30, 0.85);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 0 15px rgba(0, 200, 255, 0.2);
+            margin: 25px 0;
+            border: 1px solid rgba(0,200,255,0.2);
         }
 
-        /* Success text in light green */
+        /* Success messages */
         .success {
-            color: #4caf50;
+            color: #4efc4e;
             font-weight: bold;
+            text-shadow: 0 0 8px rgba(78, 252, 78, 0.6);
         }
         </style>
         """,
         unsafe_allow_html=True
     )
+
 
 def ws_url_from_backend(burl: str):
     if burl.startswith("https://"):
