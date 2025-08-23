@@ -162,48 +162,38 @@ class AudioCallApp:
     def show_room_options(self):
         st.markdown("<div class='subheader'>🛠 Choose Your Room Option</div>", unsafe_allow_html=True)
 
-        st.markdown("""
-        <div style="display: flex; justify-content: center; gap: 30px; flex-wrap: wrap;">
-            <!-- Create Room Card -->
-            <div class="glass-card" style="flex: 1; min-width: 280px; max-width: 350px; text-align:center;">
-                <h3>➕ Create Room</h3>
-                <p>Create a new public or private room to start an audio call</p>
-                <input type="checkbox" id="publicRoom" checked> 🌍 Public Room<br><br>
-                <button onclick="document.getElementById('createRoomBtn').click();" style="padding:0.6em 1.2em; border-radius:10px;">🚀 Create Room</button>
-            </div>
+        # Card layout container
+        col1, col2 = st.columns(2)
 
-            <!-- Join Room Card -->
-            <div class="glass-card" style="flex: 1; min-width: 280px; max-width: 350px; text-align:center;">
-                <h3>🔑 Join Room</h3>
-                <p>Enter the room code to join an existing room</p>
-                <input type="text" placeholder="Room Code" id="roomCodeInput" style="padding:0.5em; border-radius:8px; width:80%; margin-bottom:10px;"><br>
-                <button onclick="document.getElementById('joinRoomBtn').click();" style="padding:0.6em 1.2em; border-radius:10px;">➡️ Join Room</button>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        with col1:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.markdown("<h3>➕ Create Room</h3>", unsafe_allow_html=True)
+            public = st.checkbox("🌍 Public Room?", value=True)
+            if st.button("🚀 Create Room"):
+                resp = requests.post(f"{self.backend_url}/create_room",
+                                    json={"user_id": st.session_state['user_id'], "public": public})
+                if resp.status_code == 200:
+                    st.session_state['room_code'] = resp.json()["room_code"]
+                    st.success(f"🎉 Room created: `{st.session_state['room_code']}`")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Failed to create room: {resp.text}")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-
-        public = st.checkbox("🌍 Public Room ?", value=True, key="publicRoomHidden", label_visibility="collapsed")
-        if st.button("🚀 Create Room", key="createRoomBtn"):
-            resp = requests.post(f"{self.backend_url}/create_room",
-                                json={"user_id": st.session_state['user_id'], "public": public})
-            if resp.status_code == 200:
-                st.session_state['room_code'] = resp.json()["room_code"]
-                st.success(f"🎉 Room created: `{st.session_state['room_code']}`")
-                st.rerun()
-            else:
-                st.error(f"❌ Failed to create room: {resp.text}")
-
-        room_code = st.text_input("Room Code", key="roomCodeHidden", label_visibility="collapsed")
-        if st.button("➡️ Join Room", key="joinRoomBtn"):
-            resp = requests.post(f"{self.backend_url}/join_room",
-                                json={"user_id": st.session_state['user_id'], "room_code": room_code or None})
-            if resp.status_code == 200:
-                st.session_state['room_code'] = resp.json()["room_code"]
-                st.success(f"✅ Joined room: `{st.session_state['room_code']}`")
-                st.rerun()
-            else:
-                st.error(f"❌ Failed to join room: {resp.text}")
+        with col2:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.markdown("<h3>🔑 Join Room</h3>", unsafe_allow_html=True)
+            room_code = st.text_input("Room Code")
+            if st.button("➡️ Join Room"):
+                resp = requests.post(f"{self.backend_url}/join_room",
+                                    json={"user_id": st.session_state['user_id'], "room_code": room_code or None})
+                if resp.status_code == 200:
+                    st.session_state['room_code'] = resp.json()["room_code"]
+                    st.success(f"✅ Joined room: `{st.session_state['room_code']}`")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Failed to join room: {resp.text}")
+            st.markdown('</div>', unsafe_allow_html=True)
 
     def join_room(self):
         room_code = st.text_input("Enter Room Code 🔢")
