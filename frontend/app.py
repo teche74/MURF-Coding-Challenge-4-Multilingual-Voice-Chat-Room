@@ -72,33 +72,29 @@ class AudioCallApp:
     def login(self):
         st.markdown(
             """
-            <style>
-            body {
-                margin: 0;
-                height: 100vh;
-                overflow: hidden;
-            }
-            .animated-bg {
-                position: fixed;
-                top: 0; left: 0;
-                width: 100%; height: 100%;
-                background: linear-gradient(270deg, #ff7eb3, #65d8ff, #6ef3a5, #f6d365);
-                background-size: 800% 800%;
-                animation: gradientShift 15s ease infinite;
-                z-index: -1;
-            }
-            @keyframes gradientShift {
-                0% { background-position: 0% 50%; }
-                50% { background-position: 100% 50%; }
-                100% { background-position: 0% 50%; }
-            }
-            </style>
-            <div class="animated-bg"></div>
+            <div id="bg-animation" style="position: fixed; width: 100%; height: 100%; z-index: -1;"></div>
+    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.waves.min.js"></script>
+    <script>
+      VANTA.WAVES({
+        el: "#bg-animation",
+        mouseControls: true,
+        touchControls: true,
+        minHeight: 200.00,
+        minWidth: 200.00,
+        scale: 1.00,
+        scaleMobile: 1.00,
+        color: 0x3bb2ff,
+        shininess: 50.00,
+        waveHeight: 20.00,
+        waveSpeed: 0.75,
+        zoom: 1.05
+      })
+    </script>
             """,
             unsafe_allow_html=True,
         )
 
-        st.title("✨ Login With Google ✨")
+        st.title("✨ 🎧 Multilingual Audio Chat ✨")
 
         if "user_id" in st.session_state and "name" in st.session_state:
             st.success(f"Logged in as {st.session_state['name']}")
