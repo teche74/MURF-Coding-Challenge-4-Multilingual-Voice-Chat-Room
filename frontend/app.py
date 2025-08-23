@@ -10,78 +10,83 @@ def local_css():
     st.markdown(
         """
         <style>
-        /* Full background with animated gradient */
+        /* Animated vibrant gradient background */
         .stApp {
-            background: linear-gradient(-45deg, #0f0f0f, #1c1c1c, #2b2b2b, #121212);
+            background: linear-gradient(-45deg, #6a11cb, #2575fc, #00c9ff, #92fe9d);
             background-size: 400% 400%;
             animation: gradientBG 12s ease infinite;
             color: white;
         }
-
         @keyframes gradientBG {
             0% {background-position: 0% 50%;}
             50% {background-position: 100% 50%;}
             100% {background-position: 0% 50%;}
         }
 
-        /* Title with glow */
+        /* Glassmorphism panel */
+        .glass-card {
+            padding: 30px;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+            border: 1px solid rgba(255,255,255,0.15);
+            margin: 20px 0;
+        }
+
+        /* Title with neon glow */
         .title {
-            font-size: 2.5rem;
+            font-size: 2.8rem;
             font-weight: 800;
             text-align: center;
             margin-bottom: 25px;
             color: #ffffff;
-            text-shadow: 0 0 15px rgba(0, 200, 255, 0.7),
-                         0 0 30px rgba(0, 200, 255, 0.5);
+            text-shadow: 0 0 15px rgba(255,255,255,0.8),
+                         0 0 30px rgba(0, 180, 255, 0.7);
         }
 
-        /* Subheader - sleek white with spacing */
         .subheader {
-            font-size: 1.5rem;
+            font-size: 1.3rem;
             font-weight: 500;
-            color: #e0e0e0;
-            margin: 15px 0;
+            color: #f0f0f0;
+            margin-bottom: 15px;
             text-align: center;
         }
 
         /* Modern buttons */
         .stButton>button {
-            background: linear-gradient(90deg, #00c6ff, #0072ff);
+            background: linear-gradient(135deg, #00f2fe, #4facfe);
             color: white;
             font-weight: 600;
             border-radius: 12px;
             padding: 0.7em 1.5em;
             border: none;
             transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(0, 118, 255, 0.4);
+            box-shadow: 0 6px 18px rgba(0, 180, 255, 0.5);
         }
         .stButton>button:hover {
-            transform: scale(1.08);
-            box-shadow: 0 6px 20px rgba(0, 118, 255, 0.7);
+            transform: translateY(-3px) scale(1.05);
+            box-shadow: 0 8px 25px rgba(0, 180, 255, 0.8);
         }
 
-        /* Room box - glowing card */
-        .room-box {
-            padding: 25px;
-            border-radius: 15px;
-            background: rgba(30, 30, 30, 0.85);
-            backdrop-filter: blur(10px);
-            box-shadow: 0 0 15px rgba(0, 200, 255, 0.2);
-            margin: 25px 0;
-            border: 1px solid rgba(0,200,255,0.2);
+        /* Input box styling */
+        .stTextInput>div>div>input {
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.2);
+            color: white;
         }
 
-        /* Success messages */
+        /* Success messages glowing */
         .success {
             color: #4efc4e;
             font-weight: bold;
-            text-shadow: 0 0 8px rgba(78, 252, 78, 0.6);
+            text-shadow: 0 0 10px rgba(78, 252, 78, 0.7);
         }
         </style>
         """,
         unsafe_allow_html=True
     )
-
 
 def ws_url_from_backend(burl: str):
     if burl.startswith("https://"):
@@ -154,17 +159,51 @@ class AudioCallApp:
             self.join_room()
         st.markdown("</div>", unsafe_allow_html=True)
 
-    def create_room(self):
-        public = st.checkbox("🌍 Public Room?", value=True)
-        if st.button("🚀 Create Room"):
+    def show_room_options(self):
+        st.markdown("<div class='subheader'>🛠 Choose Your Room Option</div>", unsafe_allow_html=True)
+
+        st.markdown("""
+        <div style="display: flex; justify-content: center; gap: 30px; flex-wrap: wrap;">
+            <!-- Create Room Card -->
+            <div class="glass-card" style="flex: 1; min-width: 280px; max-width: 350px; text-align:center;">
+                <h3>➕ Create Room</h3>
+                <p>Create a new public or private room to start an audio call</p>
+                <input type="checkbox" id="publicRoom" checked> 🌍 Public Room<br><br>
+                <button onclick="document.getElementById('createRoomBtn').click();" style="padding:0.6em 1.2em; border-radius:10px;">🚀 Create Room</button>
+            </div>
+
+            <!-- Join Room Card -->
+            <div class="glass-card" style="flex: 1; min-width: 280px; max-width: 350px; text-align:center;">
+                <h3>🔑 Join Room</h3>
+                <p>Enter the room code to join an existing room</p>
+                <input type="text" placeholder="Room Code" id="roomCodeInput" style="padding:0.5em; border-radius:8px; width:80%; margin-bottom:10px;"><br>
+                <button onclick="document.getElementById('joinRoomBtn').click();" style="padding:0.6em 1.2em; border-radius:10px;">➡️ Join Room</button>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+        public = st.checkbox("🌍 Public Room ?", value=True, key="publicRoomHidden", label_visibility="collapsed")
+        if st.button("🚀 Create Room", key="createRoomBtn"):
             resp = requests.post(f"{self.backend_url}/create_room",
-                                 json={"user_id": st.session_state['user_id'], "public": public})
+                                json={"user_id": st.session_state['user_id'], "public": public})
             if resp.status_code == 200:
                 st.session_state['room_code'] = resp.json()["room_code"]
                 st.success(f"🎉 Room created: `{st.session_state['room_code']}`")
                 st.rerun()
             else:
                 st.error(f"❌ Failed to create room: {resp.text}")
+
+        room_code = st.text_input("Room Code", key="roomCodeHidden", label_visibility="collapsed")
+        if st.button("➡️ Join Room", key="joinRoomBtn"):
+            resp = requests.post(f"{self.backend_url}/join_room",
+                                json={"user_id": st.session_state['user_id'], "room_code": room_code or None})
+            if resp.status_code == 200:
+                st.session_state['room_code'] = resp.json()["room_code"]
+                st.success(f"✅ Joined room: `{st.session_state['room_code']}`")
+                st.rerun()
+            else:
+                st.error(f"❌ Failed to join room: {resp.text}")
 
     def join_room(self):
         room_code = st.text_input("Enter Room Code 🔢")
