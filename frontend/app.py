@@ -149,20 +149,8 @@ class AudioCallApp:
             st.rerun()
 
     def show_room_options(self):
-        st.markdown("<div class='subheader'>🛠 Room Options</div>", unsafe_allow_html=True)
-
-        option = st.radio("Select an option", ["➕ Create Room", "🔑 Join Room"])
-        st.markdown("<div class='room-box'>", unsafe_allow_html=True)
-        if option == "➕ Create Room":
-            self.create_room()
-        else:
-            self.join_room()
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    def show_room_options(self):
         st.markdown("<div class='subheader'>🛠 Choose Your Room Option</div>", unsafe_allow_html=True)
 
-        # Card layout container
         col1, col2 = st.columns(2)
 
         with col1:
