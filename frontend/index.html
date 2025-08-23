@@ -1,31 +1,49 @@
 <!doctype html>
 <html>
-
 <head>
-    <meta charset="utf-8">
-    <title>Voice Room</title>
+  <meta charset="utf-8">
+  <title>Voice Room</title>
+  <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
-    <div id="controls" class="control-bar">
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <h2 class="room-title">Room: <span id="roomName"></span></h2>
+      <ul id="participants" class="participants-list"></ul>
+    </aside>
+
+    <!-- Main Call Area -->
+    <main class="main-content">
+      <div class="status-bar">
+        <span id="status">🔌 Connecting...</span>
+      </div>
+      <div class="controls">
         <button id="muteBtn" class="control-btn">🔇 Mute</button>
         <button id="unmuteBtn" class="control-btn">🎙️ Unmute</button>
         <button id="leaveBtn" class="control-btn leave">❌ Leave</button>
-        <span id="status" style="margin-left:12px;color:#ddd;"></span>
-    </div>
+      </div>
+      <div class="chat-box">
+        <div id="chat-messages" class="messages"></div>
+        <div class="chat-input">
+          <input type="text" id="chatInput" placeholder="Type a message..." />
+          <button id="sendBtn">➤</button>
+        </div>
+      </div>
+    </main>
+  </div>
 
-    <!-- Config injected by backend -->
-    <script>
-        window.APP_CONFIG = {
-            WS_URL: {{ WS_URL }},
-        BACKEND_HTTP: { { BACKEND_HTTP } },
-        ROOM: { { ROOM } },
-        USER: { { USER } }
+  <!-- Config injected by backend -->
+  <script>
+    window.APP_CONFIG = {
+      WS_URL: {{ WS_URL }},
+      BACKEND_HTTP: {{ BACKEND_HTTP }},
+      ROOM: {{ ROOM }},
+      USER: {{ USER }}
     };
-    </script>
+    document.getElementById('roomName').innerText = window.APP_CONFIG.ROOM;
+  </script>
 
-    <!-- Main logic -->
-    <script src="script.js"></script>
+  <script src="script.js"></script>
 </body>
-
 </html>
