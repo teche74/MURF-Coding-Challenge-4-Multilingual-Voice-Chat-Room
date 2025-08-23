@@ -1,3 +1,5 @@
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -15,14 +17,13 @@ sys.path.append(os.path.dirname(__file__))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-env_path = os.path.join(BASE_DIR, ".env")
+env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(env_path)
 
-CLIENT_ID = config('GOOGLE_CLIENT_ID', default=None)
-CLIENT_SECRET = config('GOOGLE_CLIENT_SECRET', default=None)
+CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
-oauth = OAuth(config)
+oauth = OAuth()
 oauth.register(
     name='google',
     client_id=CLIENT_ID,
@@ -39,7 +40,7 @@ TTS_CACHE: Dict[Tuple[str, str, str], Tuple[bytes, float]] = {}
 CACHE_TTL_SECONDS = 60 * 5
 
 app = FastAPI(title="Multilingual Chat Room")
-app.add_middleware(SessionMiddleware, secret_key=config('SESSION_SECRET_KEY', default="super-secret"))
+app.add_middleware(SessionMiddleware, secret_key= os.getenv("SESSION_SECRET_KEY", "super-secret")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"]
