@@ -115,21 +115,21 @@ class AudioCallApp:
         try:
             info = requests.get(f"{self.backend_url}/room_info", params={"room_code": room}).json()
             members = info.get("members", [])
-        except Exception:
+        except Exception as e:
             st.warning(f"Failed to fetch members: {e}")
             members = []
         st.caption(f"Room Code: {room} • Members: {len(members)}")
 
         ws_base = ws_url_from_backend(self.backend_url)
         ws_url = f"{ws_base}/ws?room_code={room}&user_id={user}"
-        stun = "stun:stun.l.google.com:19302"
+        ice_servers = [
+            {"urls": ["stun:stun.l.google.com:19302"]}
+        ]
 
         st_html(f"""
 <!doctype html>
 <html>
-<head>
-<meta charset="utf-8">
-</head>
+<head><meta charset="utf-8"></head>
 <body>
 <div id="controls" class="control-bar">
   <button id="muteBtn" class="control-btn">🔇 Mute</button>
@@ -138,13 +138,26 @@ class AudioCallApp:
   <span id="status" style="margin-left:12px;color:#ddd;"></span>
 </div>
 
+<div id="participants"></div>
+
 <script>
 const WS_URL = {json.dumps(ws_url)};
-const ICE_SERVERS = [{{ urls: "stun:stun.l.google.com:19302" }}];
+const ICE_SERVERS = {json.dumps(ice_servers)};
+const BACKEND_HTTP = {json.dumps(self.backend_url)};
+const ROOM = {json.dumps(room)};
+const USER = {json.dumps(user)};
 
 let localStream = null;
 let ws = null;
 const peers = new Map();  // userId -> RTCPeerConnection
+
+function updateParticipantsUI() {{
+  const list = Array.from(peers.keys());
+  // include self visually
+  if (!list.includes(USER)) list.unshift(USER);
+  const container = document.getElementById('participants');
+  container.innerHTML = '<b>Participants:</b> ' + list.map(x => '<span style="margin-left:8px">'+x+'</span>').join('');
+}}
 
 async function initLocalMedia() {{
   try {{
@@ -159,12 +172,16 @@ async function initLocalMedia() {{
 function createPeerConnection(peerId) {{
   const pc = new RTCPeerConnection({{ iceServers: ICE_SERVERS }});
 
-  // Add local audio track to send to peer
+  // Add local audio track to send to peer (if present)
   if (localStream && localStream.getAudioTracks().length > 0) {{
-    pc.addTrack(localStream.getAudioTracks()[0], localStream);
+    try {{
+      pc.addTrack(localStream.getAudioTracks()[0], localStream);
+    }} catch(e) {{
+      console.warn("addTrack failed", e);
+    }}
   }}
 
-  // When we get remote track, create hidden audio element and play it
+  // Play remote audio stream
   pc.addEventListener('track', (ev) => {{
     const stream = ev.streams[0];
     let audioEl = document.getElementById('audio-' + peerId);
@@ -181,13 +198,15 @@ function createPeerConnection(peerId) {{
 
   pc.onicecandidate = (ev) => {{
     if (ev.candidate) {{
-      ws.send(JSON.stringify({{ type: 'ice-candidate', to: peerId, data: ev.candidate }}));
+      if (ws && ws.readyState === WebSocket.OPEN) {{
+        ws.send(JSON.stringify({{ type: 'ice-candidate', to: peerId, data: ev.candidate }}));
+      }}
     }}
   }};
 
   pc.onconnectionstatechange = () => {{
+    console.log('pc state', peerId, pc.connectionState);
     if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') {{
-      // cleanup
       closePeer(peerId);
     }}
   }};
@@ -196,23 +215,40 @@ function createPeerConnection(peerId) {{
 }}
 
 async function makeOffer(peerId) {{
+  if (peers.has(peerId)) {{
+    console.log('already have pc for', peerId);
+    return;
+  }}
   const pc = createPeerConnection(peerId);
   peers.set(peerId, pc);
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws.send(JSON.stringify({{ type: 'offer', to: peerId, data: offer }}));
+  updateParticipantsUI();
+  try {{
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({{ type: 'offer', to: peerId, data: offer }}));
+  }} catch (e) {{
+    console.error('makeOffer failed', e);
+  }}
 }}
 
 async function handleOffer(fromId, offer) {{
-  const pc = createPeerConnection(fromId);
-  peers.set(fromId, pc);
+  console.log('handleOffer from', fromId);
+  let pc;
+  if (peers.has(fromId)) {{
+    pc = peers.get(fromId);
+  }} else {{
+    pc = createPeerConnection(fromId);
+    peers.set(fromId, pc);
+  }}
   await pc.setRemoteDescription(new RTCSessionDescription(offer));
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   ws.send(JSON.stringify({{ type: 'answer', to: fromId, data: answer }}));
+  updateParticipantsUI();
 }}
 
 async function handleAnswer(fromId, answer) {{
+  console.log('handleAnswer from', fromId);
   const pc = peers.get(fromId);
   if (pc) {{
     await pc.setRemoteDescription(new RTCSessionDescription(answer));
@@ -233,31 +269,38 @@ async function handleCandidate(fromId, cand) {{
 function closePeer(peerId) {{
   const pc = peers.get(peerId);
   if (pc) {{
-    pc.getSenders().forEach(s => {{
-      try {{ pc.removeTrack(s); }} catch(e){{}}
-    }});
+    try {{
+      pc.getSenders().forEach(s => pc.removeTrack(s));
+    }} catch(e){{}}
     try {{ pc.close(); }} catch(e){{}}
     peers.delete(peerId);
   }}
   const a = document.getElementById('audio-' + peerId);
   if (a) a.remove();
+  updateParticipantsUI();
 }}
 
 async function startWebSocket() {{
   ws = new WebSocket(WS_URL);
   ws.onopen = () => {{
+    console.log('WS open', WS_URL);
     document.getElementById('status').innerText = "Connected to signaling";
   }};
 
   ws.onmessage = async (ev) => {{
     const msg = JSON.parse(ev.data);
+    console.log('ws msg', msg);
     if (msg.type === 'peers') {{
+      // this is the NEW client: create offers to existing peers
       for (const peerId of msg.peers) {{
         await makeOffer(peerId);
       }}
+      updateParticipantsUI();
     }} else if (msg.type === 'peer-joined') {{
-      // small delay ok
-      await makeOffer(msg.user_id);
+      // an existing peer was informed that someone joined; do NOT create an offer here.
+      // The new peer will initiate offers to existing peers.
+      console.log('peer joined', msg.user_id);
+      updateParticipantsUI();
     }} else if (msg.type === 'offer') {{
       await handleOffer(msg.from, msg.data);
     }} else if (msg.type === 'answer') {{
@@ -270,9 +313,13 @@ async function startWebSocket() {{
   }};
 
   ws.onclose = () => {{
+    console.log('WS closed');
     document.getElementById('status').innerText = "Signaling disconnected";
-    // cleanup peers
     for (const p of Array.from(peers.keys())) closePeer(p);
+  }};
+
+  ws.onerror = (e) => {{
+    console.error('WS error', e);
   }};
 }}
 
@@ -288,13 +335,23 @@ document.getElementById('unmuteBtn').onclick = () => {{
   document.getElementById('status').innerText = "Unmuted";
 }};
 
-document.getElementById('leaveBtn').onclick = () => {{
+document.getElementById('leaveBtn').onclick = async () => {{
+  try {{
+    // inform backend room membership (so /room_info stays accurate)
+    await fetch(BACKEND_HTTP + '/leave_room', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ user_id: USER, room_code: ROOM }})
+    }});
+  }} catch(e) {{
+    console.warn('leave API failed', e);
+  }}
   if (ws) ws.close();
   if (localStream) localStream.getTracks().forEach(t => t.stop());
   document.getElementById('status').innerText = "Left call";
 }};
 
-// Auto-start
+// Auto-start (init media then ws)
 (async () => {{
   await initLocalMedia();
   await startWebSocket();
