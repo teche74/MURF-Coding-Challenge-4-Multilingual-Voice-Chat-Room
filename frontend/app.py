@@ -201,6 +201,14 @@ class AudioCallApp:
         room = st.session_state['room_code']
         user = st.session_state['user_id']
 
+        st.markdown(f"""
+            <div class="glass-card" style="text-align:center;">
+                <h3>📢 Share this Room Code</h3>
+                <div style="font-size:1.5rem; font-weight:700; color:#0ff;">{room}</div>
+                <p style="color:#aaa;">Send this code to friends so they can join.</p>
+            </div>
+        """, unsafe_allow_html=True)
+
         ws_base = ws_url_from_backend(self.backend_url)
         ws_url = f"{ws_base}/ws?room_code={room}&user_id={user}"
 

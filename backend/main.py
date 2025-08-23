@@ -47,6 +47,9 @@ app.add_middleware(
 def generate_room_code(length: int = 6) -> str:
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
+def get_user_name(user_id: str) -> str:
+    return users.get(user_id, {}).get("name", user_id)
+
 async def synthesize_with_cache(text: str, target_lang: str, voice: str="default"):
     key = (text, target_lang, voice)
     now = time.time()
@@ -104,7 +107,8 @@ def join_room(req: JoinRoomRequest):
         if not public_rooms:
             raise HTTPException(status_code=400, detail="No public rooms available")
         selected_code = random.choice(public_rooms)
-        rooms[selected_code]["members"].append(req.user_id)
+        if req.user_id not in rooms[selected_code]["members"]:
+            rooms[selected_code]["members"].append(req.user_id)
         return {"status": "success", "room_code": selected_code}
 
 @app.post("/leave_room")
@@ -207,12 +211,17 @@ async def ws_endpoint(websocket: WebSocket):
 
     await ws_manager.connect(room_code, user_id, websocket)
 
-    peers = list((await ws_manager.peers_in_room(room_code, exclude=user_id)).keys())
-    await ws_manager.send_json(websocket, {"type": "peers", "peers": peers})
+    existing_peers = list((await ws_manager.peers_in_room(room_code, exclude=user_id)).keys())
+    peers_payload = [{"user_id": uid, "name": get_user_name(uid)} for uid in existing_peers]
+    await ws_manager.send_json(websocket, {"type": "peers", "peers": peers_payload})
 
-    for peer_id, peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).items():
+    for peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).items():
         try:
-            await ws_manager.send_json(peer_ws, {"type": "peer-joined", "user_id": user_id})
+            await ws_manager.send_json(peer_ws, {
+                "type": "peer-joined",
+                "user_id": user_id,
+                "name": get_user_name(user_id)
+            })
         except Exception:
             pass
 
@@ -226,6 +235,7 @@ async def ws_endpoint(websocket: WebSocket):
                 await ws_manager.relay(room_code, to_user, {
                     "type": mtype,
                     "from": user_id,
+                    "name": get_user_name(user_id),
                     "data": data
                 })
     except WebSocketDisconnect:
@@ -233,9 +243,12 @@ async def ws_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.exception("ws error: %s", e)
     finally:
-        for peer_id, peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).items():
+        for peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).values():
             try:
-                await ws_manager.send_json(peer_ws, {"type": "peer-left", "user_id": user_id})
+                await ws_manager.send_json(peer_ws, {
+                    "type": "peer-left",
+                    "user_id": user_id
+                })
             except Exception:
                 pass
         ws_manager.disconnect(room_code, user_id)
