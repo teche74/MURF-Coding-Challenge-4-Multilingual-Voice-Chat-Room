@@ -71,36 +71,41 @@ class AudioCallApp:
 
     def login(self):
         st.markdown(
-            """
-            <div id="bg-animation" style="position: fixed; width: 100%; height: 100%; z-index: -1;"></div>
-    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.waves.min.js"></script>
-    <script>
-      VANTA.WAVES({
-        el: "#bg-animation",
-        mouseControls: true,
-        touchControls: true,
-        minHeight: 200.00,
-        minWidth: 200.00,
-        scale: 1.00,
-        scaleMobile: 1.00,
-        color: 0x3bb2ff,
-        shininess: 50.00,
-        waveHeight: 20.00,
-        waveSpeed: 0.75,
-        zoom: 1.05
-      })
-    </script>
+        """
+        <style>
+        /* Make background full screen animated gradient */
+        .stApp {
+            background: linear-gradient(270deg, #0f2027, #203a43, #2c5364);
+            background-size: 600% 600%;
+            animation: gradientShift 15s ease infinite;
+        }
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        /* Darken Streamlit header and sidebar */
+        header[data-testid="stHeader"] {
+            background: linear-gradient(to right, #141E30, #243B55);
+        }
+        section[data-testid="stSidebar"] {
+            background: #1c1c1c;
+        }
+        </style>
             """,
             unsafe_allow_html=True,
         )
 
-        st.title("✨ 🎧 Multilingual Audio Chat ✨")
+        st.title("✨ 🎧 Welcome to Multilingual Audio ChatRoom ✨")
+        st.subheader("Login With Google to Continue")
 
         if "user_id" in st.session_state and "name" in st.session_state:
-            st.success(f"Logged in as {st.session_state['name']}")
+            st.success(f"✅ Logged in as {st.session_state['name']}")
             return
 
         login_url = f"{self.backend_url}/login/google"
+
         if st.button("🔑 Login with Google", use_container_width=True):
             st.markdown(f"[Click here to login with Google]({login_url})", unsafe_allow_html=True)
 
@@ -108,7 +113,7 @@ class AudioCallApp:
         if "user_id" in query_params and "name" in query_params:
             st.session_state['user_id'] = query_params["user_id"]
             st.session_state['name'] = query_params["name"]
-            st.success(f"Logged in as {st.session_state['name']}")
+            st.success(f"✅ Logged in as {st.session_state['name']}")
             st.rerun()
 
     def show_room_options(self):
