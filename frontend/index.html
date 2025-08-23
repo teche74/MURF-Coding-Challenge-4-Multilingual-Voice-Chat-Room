@@ -275,7 +275,7 @@
 
         let localStream = null;
         let ws = null;
-        const peers = new Map();
+        const peers = new Map(); // peerId -> RTCPeerConnection
         const userSlots = ["user1", "user2", "user3", "user4"];
         const peerSlotMap = new Map();
         const participants = new Set();
@@ -353,6 +353,41 @@
             removeSlot(peerId);
         }
 
+        async function createPeerConnection(peerId) {
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+            });
+
+            // Send local audio
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            // Remote audio
+            pc.ontrack = (event) => {
+                let audio = document.getElementById("audio-" + peerId);
+                if (!audio) {
+                    audio = document.createElement("audio");
+                    audio.id = "audio-" + peerId;
+                    audio.autoplay = true;
+                    document.body.appendChild(audio);
+                }
+                audio.srcObject = event.streams[0];
+            };
+
+            // ICE candidates
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws.send(JSON.stringify({
+                        type: "ice-candidate",
+                        to: peerId,
+                        data: event.candidate
+                    }));
+                }
+            };
+
+            peers.set(peerId, pc);
+            return pc;
+        }
+
         async function startWebSocket() {
             ws = new WebSocket(WS_URL);
 
@@ -363,14 +398,68 @@
 
             ws.onmessage = async (ev) => {
                 const msg = JSON.parse(ev.data);
+
                 if (msg.type === "chat") {
-                    addChatMessage(msg.user_id, msg.message, msg.user_id === USER);
+                    addChatMessage(msg.from, msg.text, msg.from === USER);
+
+                } else if (msg.type === "peers") {
+                    // Existing peers, create offers
+                    for (const peer of msg.peers) {
+                        const peerId = peer.user_id;
+                        const pc = await createPeerConnection(peerId);
+                        assignSlot(peerId, peer.name || peerId);
+
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+
+                        ws.send(JSON.stringify({
+                            type: "offer",
+                            to: peerId,
+                            data: offer
+                        }));
+                    }
+
+                } else if (msg.type === "peer-joined") {
+                    const peerId = msg.user_id;
+                    assignSlot(peerId, msg.name || peerId);
+
+                } else if (msg.type === "offer") {
+                    const peerId = msg.from;
+                    const pc = await createPeerConnection(peerId);
+                    await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+
+                    ws.send(JSON.stringify({
+                        type: "answer",
+                        to: peerId,
+                        data: answer
+                    }));
+
+                } else if (msg.type === "answer") {
+                    const pc = peers.get(msg.from);
+                    if (pc) {
+                        await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+                    }
+
+                } else if (msg.type === "ice-candidate") {
+                    const pc = peers.get(msg.from);
+                    if (pc) {
+                        try {
+                            await pc.addIceCandidate(new RTCIceCandidate(msg.data));
+                        } catch (e) {
+                            console.warn("Error adding ICE", e);
+                        }
+                    }
+
                 } else if (msg.type === "peer-left") {
                     closePeer(msg.user_id);
                 }
             };
         }
 
+        // Buttons
         document.getElementById("muteBtn").onclick = () => {
             localStream?.getAudioTracks().forEach(t => t.enabled = false);
             document.getElementById("status").innerText = "Muted";
@@ -399,7 +488,7 @@
             const input = document.getElementById("chatInput");
             const text = input.value.trim();
             if (!text || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: "chat", user_id: USER, room_code: ROOM, message: text }));
+            ws.send(JSON.stringify({ type: "chat", text: text }));
             addChatMessage(USER, text, true);
             input.value = "";
         };
@@ -409,6 +498,7 @@
             await startWebSocket();
         })();
     </script>
+
 </body>
 
 </html>
