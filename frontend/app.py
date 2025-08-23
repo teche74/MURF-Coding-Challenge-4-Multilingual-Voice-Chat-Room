@@ -70,25 +70,49 @@ class AudioCallApp:
         local_css()
 
     def login(self):
-        st.markdown("<div class='title'>🎧 Multilingual Audio Chat</div>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <style>
+            body {
+                margin: 0;
+                height: 100vh;
+                overflow: hidden;
+            }
+            .animated-bg {
+                position: fixed;
+                top: 0; left: 0;
+                width: 100%; height: 100%;
+                background: linear-gradient(270deg, #ff7eb3, #65d8ff, #6ef3a5, #f6d365);
+                background-size: 800% 800%;
+                animation: gradientShift 15s ease infinite;
+                z-index: -1;
+            }
+            @keyframes gradientShift {
+                0% { background-position: 0% 50%; }
+                50% { background-position: 100% 50%; }
+                100% { background-position: 0% 50%; }
+            }
+            </style>
+            <div class="animated-bg"></div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.title("✨ Login With Google ✨")
 
         if "user_id" in st.session_state and "name" in st.session_state:
-            st.success(f"✅ Logged in as **{st.session_state['name']}**")
+            st.success(f"Logged in as {st.session_state['name']}")
             return
 
         login_url = f"{self.backend_url}/login/google"
-        st.markdown("<p style='text-align:center;'>Please login to continue</p>", unsafe_allow_html=True)
-
-        col1, col2, col3 = st.columns([1,2,1])
-        with col2:
-            if st.button("🔑 Login with Google"):
-                st.markdown(f"[Click here to login with Google]({login_url})", unsafe_allow_html=True)
+        if st.button("🔑 Login with Google", use_container_width=True):
+            st.markdown(f"[Click here to login with Google]({login_url})", unsafe_allow_html=True)
 
         query_params = st.query_params
         if "user_id" in query_params and "name" in query_params:
             st.session_state['user_id'] = query_params["user_id"]
             st.session_state['name'] = query_params["name"]
-            st.success(f"✅ Logged in as **{st.session_state['name']}**")
+            st.success(f"Logged in as {st.session_state['name']}")
             st.rerun()
 
     def show_room_options(self):
