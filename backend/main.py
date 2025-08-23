@@ -40,7 +40,7 @@ TTS_CACHE: Dict[Tuple[str, str, str], Tuple[bytes, float]] = {}
 CACHE_TTL_SECONDS = 60 * 5
 
 app = FastAPI(title="Multilingual Chat Room")
-app.add_middleware(SessionMiddleware, secret_key= os.getenv("SESSION_SECRET_KEY", "super-secret")
+app.add_middleware(SessionMiddleware, secret_key= os.getenv("SESSION_SECRET_KEY", "super-secret"))
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"]
