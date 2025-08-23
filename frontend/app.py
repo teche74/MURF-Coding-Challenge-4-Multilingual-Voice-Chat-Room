@@ -1,20 +1,11 @@
 import streamlit as st
-import sounddevice as sd
-import numpy as np
-import websocket
-import threading
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import requests
-import json
-from utils import play_audio
 
-class ChatApp:
+class AudioCallApp:
     def __init__(self):
         self.backend_url = "http://localhost:8000"
-        self.ws = None
-        self.is_recording = False
-        self.recording_thread = None
-        self.stream = None
-        self.receive_thread = None
+        self.muted = False
 
     def login(self):
         st.title("Login With Google")
@@ -22,23 +13,11 @@ class ChatApp:
             st.success(f"Logged in as {st.session_state['name']}")
             return
 
-        language_options = {
-            "English":"en","Spanish":"es","French":"fr","German":"de",
-            "Italian":"it","Hindi":"hi","Portuguese":"pt","Dutch":"nl","Korean":"ko",
-            "Chinese (Mandarin)":"zh","Bengali":"bn","Tamil":"ta","Polish":"pl",
-            "Japanese":"ja","Turkish":"tr","Indonesian":"id","Croatian":"hr",
-            "Greek":"el","Romanian":"ro","Slovak":"sk","Bulgarian":"bg"
-        }
-
-        selected_language_name = st.selectbox("Preferred Language", list(language_options.keys()))
-        language = language_options[selected_language_name]
-        login_url = f"{self.backend_url}/login/google?language={language}"
+        login_url = f"{self.backend_url}/login/google"
         if st.button("Login with Google"):
             st.markdown(f"[Click here to login with Google]({login_url})", unsafe_allow_html=True)
-            st.info("Open the link above to login (a new tab will be used). After login you'll be redirected back.")
 
         query_params = st.query_params
-
         if "user_id" in query_params and "name" in query_params:
             st.session_state['user_id'] = query_params["user_id"]
             st.session_state['name'] = query_params["name"]
@@ -66,7 +45,7 @@ class ChatApp:
                 st.error(f"Failed to create room: {resp.text}")
 
     def join_room(self):
-        room_code = st.text_input("Enter Room Code (optional)")
+        room_code = st.text_input("Enter Room Code")
         if st.button("Join"):
             resp = requests.post(f"{self.backend_url}/join_room",
                                  json={"user_id": st.session_state['user_id'], "room_code": room_code or None})
@@ -77,141 +56,143 @@ class ChatApp:
             else:
                 st.error(f"Failed to join room: {resp.text}")
 
-    def setup_websocket(self):
-        if self.ws:
-            try:
-                if getattr(self.ws, "connected", True):
-                    return True
-            except Exception:
-                pass
+    def run_audio_call(self):
+        st.markdown(
+            """
+            <style>
+            .participant-card {
+                border: 2px solid #333;
+                border-radius: 16px;
+                padding: 20px;
+                margin: 10px;
+                background-color: #1e1e1e;
+                color: white;
+                text-align: center;
+                box-shadow: 0px 0px 8px rgba(0,0,0,0.4);
+                min-height: 150px;
+                transition: all 0.2s ease-in-out;
+            }
+            .active-speaker {
+                border: 2px solid #4CAF50 !important;
+                box-shadow: 0px 0px 20px #4CAF50;
+            }
+            .empty-slot {
+                border: 2px dashed #444;
+                border-radius: 16px;
+                padding: 20px;
+                margin: 10px;
+                color: #777;
+                text-align: center;
+                min-height: 150px;
+            }
+            audio, video {
+                display: none !important;
+            }
+            button[title="Stop"], button[title="Start"] {
+                display: none !important;
+            }
+            .stAudio, .stVideo, button[title="Start"], button[title="Stop"] {
+                display: none !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
-        if "room_code" not in st.session_state or "user_id" not in st.session_state:
-            st.error("Missing room_code or user_id in session. Please login and join/create a room first.")
-            return False
+        st.subheader("Audio Call Room 🎤")
+        st.write(f"Room Code: {st.session_state['room_code']}")
 
-        room_code = st.session_state['room_code']
-        user_id = st.session_state['user_id']
-        url = f"ws://localhost:8000/ws?room_code={room_code}&user_id={user_id}"
+        # WebRTC audio-only
+        webrtc_ctx = webrtc_streamer(
+            key="audio_call",
+            mode=WebRtcMode.SENDRECV,
+            audio_receiver_size=1024,
+            sendback_audio=False,
+            media_stream_constraints={"audio": True, "video": False},
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            video_html_attrs={"style": {"display": "none"}},
+            desired_playing_state=True
+        )
 
+        # Controls
+        col1, col2, col3 = st.columns([1,1,1])
+
+        with col1:
+            if st.button("🔇 Mute"):
+                if webrtc_ctx and webrtc_ctx.state.playing:
+                    webrtc_ctx.audio_receiver_enabled = False
+                    self.muted = True
+
+        with col2:
+            if st.button("🎙️ Unmute"):
+                if webrtc_ctx and webrtc_ctx.state.playing:
+                    webrtc_ctx.audio_receiver_enabled = True
+                    self.muted = False
+
+        with col3:
+            if st.button("❌ Leave Call"):
+                if "room_code" in st.session_state:
+                    del st.session_state["room_code"]
+                st.rerun()
+
+        # Get members
         try:
-            self.ws = websocket.create_connection(url, timeout=5)
-            st.success("Connected to voice chat!")
+            resp = requests.get(f"{self.backend_url}/room_info?room_code={st.session_state['room_code']}")
+            members = resp.json().get("members", [])
+        except Exception:
+            members = []
 
-            def receive_audio():
-                last_header = None
-                while self.ws:
-                    try:
-                        data = self.ws.recv()
-                        if isinstance(data, bytes):
-                            if last_header and last_header.get("type") == "tts_audio":
-                                try:
-                                    play_audio(data, format_hint="mp3")
-                                except Exception as e:
-                                    print("Error playing tts mp3:", e)
-                                last_header = None
-                            else:
-                                try:
-                                    play_audio(data)
-                                except Exception as e:
-                                    print("Error playing forwarded audio:", e)
-                        else:
-                            try:
-                                payload = json.loads(data)
-                                if payload.get("type") == "tts_audio":
-                                    last_header = payload
-                                else:
-                                    print("WS text message:", payload)
-                            except Exception:
-                                print("WS got text:", data)
-                    except Exception as e:
-                        print(f"WebSocket receive error (will close): {e}")
-                        break
+        # Simulated active speaker (you can replace with real audio-level detection later)
+        import random
+        active_speaker = random.choice(members) if members else None
 
-                try:
-                    if self.ws:
-                        self.ws.close()
-                except Exception:
-                    pass
-                self.ws = None
-                print("Receive thread exiting, ws closed")
+        # WhatsApp-like grid
+        st.markdown("### Participants")
+        num_members = max(1, len(members))
+        cols_per_row = 2 if num_members <= 4 else 4
+        rows = (num_members + cols_per_row - 1) // cols_per_row
 
-            self.receive_thread = threading.Thread(target=receive_audio, daemon=True)
-            self.receive_thread.start()
-            return True
-
-        except Exception as e:
-            st.error(f"Failed to connect to websocket: {e!r}")
-            print("WebSocket connect exception:", repr(e))
-            self.ws = None
-            return False
-
-    def start_recording(self):
-        if not self.ws:
-            st.warning("WebSocket not connected!")
-            return
-
-        self.is_recording = True
-        chunk_size = 1024
-        sample_rate = 16000
-
-        def callback(indata, frames, time_info, status):
-            if status:
-                print("Input status:", status)
-            
-            if self.is_recording and self.ws and self.ws.connected:
-                try:
-                    audio_bytes = (indata * 32767).astype(np.int16).tobytes()
-                    self.ws.send(audio_bytes)
-                except Exception as e:
-                    print(f"Error sending audio: {e}")
-
-        def record():
-            with sd.InputStream(samplerate=sample_rate,
-                                channels=1,
-                                blocksize=chunk_size,
-                                callback=callback,
-                                dtype=np.float32):
-                while self.is_recording:
-                    sd.sleep(100)
-
-        self.recording_thread = threading.Thread(target=record, daemon=True)
-        self.recording_thread.start()
-
-    def stop_recording(self):
-        if not self.is_recording:
-            return
-        self.is_recording = False
-
+        for r in range(rows):
+            cols = st.columns(cols_per_row)
+            for c in range(cols_per_row):
+                idx = r * cols_per_row + c
+                if idx < num_members:
+                    user = members[idx]
+                    card_class = "participant-card"
+                    if user == active_speaker:
+                        card_class += " active-speaker"
+                    with cols[c]:
+                        st.markdown(
+                            f"""
+                            <div class="{card_class}">
+                                <div style='font-size:40px;'>👤</div>
+                                <b>{user}</b><br>
+                                {"🔇 Muted" if self.muted else "🎙️ Speaking..."}
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                else:
+                    with cols[c]:
+                        st.markdown(
+                            "<div class='empty-slot'>Empty Slot</div>",
+                            unsafe_allow_html=True
+                        )
     def run(self):
         if "user_id" not in st.session_state:
             self.login()
             return
 
-        if "room_code" in st.session_state:
-            st.subheader(f"Room: {st.session_state['room_code']}")
-            if "ws_connected" not in st.session_state:
-                st.session_state["ws_connected"] = self.setup_websocket()
-
-            if not self.is_recording:
-                if st.button("Start Talking"):
-                    self.start_recording()
-            else:
-                if st.button("Stop Talking"):
-                    self.stop_recording()
-
-            try:
-                resp = requests.get(f"{self.backend_url}/room_info?room_code={st.session_state['room_code']}")
-                if resp.status_code == 200:
-                    members = resp.json().get("members", [])
-                    st.write(f"Users in room: {', '.join(members)}")
-            except Exception:
-                pass
-        else:
+        if "room_code" not in st.session_state:
             self.show_room_options()
+        else:
+            self.run_audio_call()
+
 
 def main():
-    app = ChatApp()
+    app = AudioCallApp()
     app.run()
+
 
 if __name__ == "__main__":
     main()
