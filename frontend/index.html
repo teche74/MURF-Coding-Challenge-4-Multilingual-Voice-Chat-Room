@@ -1,10 +1,209 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Voice Room</title>
-    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Global */
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: #eee;
+            display: flex;
+            height: 100vh;
+        }
+
+        /* App Layout */
+        .app-container {
+            display: flex;
+            width: 100%;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 250px;
+            background: rgba(0, 0, 0, 0.5);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .room-title {
+            font-size: 18px;
+            color: #0ff;
+            margin-bottom: 15px;
+        }
+
+        .participants-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .participants-list li {
+            padding: 8px;
+            margin: 4px 0;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        /* Main Area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            padding: 20px;
+        }
+
+        /* Status */
+        .status-bar {
+            text-align: center;
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: #0ff;
+        }
+
+        /* User Grid */
+        .user-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            grid-template-rows: repeat(2, 1fr);
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .user-card {
+            width: 150px;
+            height: 180px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(8px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .user-card .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            margin-bottom: 10px;
+            transition: all 0.2s ease;
+        }
+
+        .user-card .username {
+            color: #fcfcfc;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .user-card.speaking .avatar {
+            box-shadow: 0 0 20px #00f2fe, 0 0 40px #4facfe;
+            transform: scale(1.1);
+        }
+
+        .user-card.empty .avatar {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+
+        .control-btn {
+            padding: 12px 18px;
+            font-size: 16px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            background: #333;
+            color: #eee;
+            transition: all 0.2s ease;
+        }
+
+        .control-btn:hover {
+            background: #444;
+        }
+
+        .leave {
+            background: #b00020;
+            color: #fff;
+        }
+
+        .leave:hover {
+            background: #d00030;
+        }
+
+        /* Chat */
+        .chat-box {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 12px;
+            overflow: hidden;
+            backdrop-filter: blur(5px);
+        }
+
+        .messages {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin: 6px 0;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            max-width: 80%;
+        }
+
+        .message.me {
+            background: rgba(0, 255, 255, 0.2);
+            align-self: flex-end;
+        }
+
+        .chat-input {
+            display: flex;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            outline: none;
+            background: rgba(0, 0, 0, 0.5);
+            color: #fff;
+        }
+
+        .chat-input button {
+            padding: 0 20px;
+            background: #0ff;
+            border: none;
+            color: #000;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .chat-input button:hover {
+            background: #0cc;
+        }
+    </style>
 </head>
 
 <body>
@@ -15,12 +214,26 @@
         </aside>
 
         <main class="main-content">
+            
+            <div id="status" class="status-bar">Connecting...</div>
 
             <div class="user-grid">
-                <div class="user-card empty" id="user1"><div class="avatar"></div><div class="username">Empty</div></div>
-                <div class="user-card empty" id="user2"><div class="avatar"></div><div class="username">Empty</div></div>
-                <div class="user-card empty" id="user3"><div class="avatar"></div><div class="username">Empty</div></div>
-                <div class="user-card empty" id="user4"><div class="avatar"></div><div class="username">Empty</div></div>
+                <div class="user-card empty" id="user1">
+                    <div class="avatar"></div>
+                    <div class="username">Empty</div>
+                </div>
+                <div class="user-card empty" id="user2">
+                    <div class="avatar"></div>
+                    <div class="username">Empty</div>
+                </div>
+                <div class="user-card empty" id="user3">
+                    <div class="avatar"></div>
+                    <div class="username">Empty</div>
+                </div>
+                <div class="user-card empty" id="user4">
+                    <div class="avatar"></div>
+                    <div class="username">Empty</div>
+                </div>
             </div>
 
             <!-- Controls -->
@@ -45,14 +258,242 @@
     <script>
         window.APP_CONFIG = {
             WS_URL: {{ WS_URL }},
-        BACKEND_HTTP: { { BACKEND_HTTP } },
-        ROOM: { { ROOM } },
-        USER: { { USER } }
+        BACKEND_HTTP: {{ BACKEND_HTTP }},
+        ROOM: {{ ROOM }},
+        USER: {{ USER }}
     };
-        document.getElementById('roomName').innerText = window.APP_CONFIG.ROOM;
+    
+    document.getElementById('roomName').innerText = window.APP_CONFIG.ROOM;
+        
+    // Load values injected in index.html
+
+        const { WS_URL, BACKEND_HTTP, ROOM, USER } = window.APP_CONFIG;
+
+        let localStream = null;
+        let ws = null;
+        const peers = new Map(); // userId -> RTCPeerConnection
+        const maxUsers = 4;
+        const userSlots = ["user1", "user2", "user3", "user4"];
+
+        // Map peerId to slot
+        const peerSlotMap = new Map();
+
+        async function initLocalMedia() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    audio: true,
+                    video: false,
+                });
+                document.getElementById("status").innerText = "Mic ready";
+            } catch (e) {
+                console.error("getUserMedia failed", e);
+                document.getElementById("status").innerText = "Mic access denied";
+            }
+        }
+
+        function assignSlot(peerId, name) {
+            for (let slot of userSlots) {
+                const el = document.getElementById(slot);
+                if (el.classList.contains("empty")) {
+                    el.classList.remove("empty");
+                    el.querySelector(".username").innerText = name;
+                    peerSlotMap.set(peerId, slot);
+                    break;
+                }
+            }
+        }
+
+        function removeSlot(peerId) {
+            const slot = peerSlotMap.get(peerId);
+            if (!slot) return;
+            const el = document.getElementById(slot);
+            el.classList.add("empty");
+            el.classList.remove("speaking");
+            el.querySelector(".username").innerText = "Empty";
+            peerSlotMap.delete(peerId);
+        }
+
+        function markSpeaking(peerId, speaking) {
+            const slot = peerSlotMap.get(peerId);
+            if (!slot) return;
+            const el = document.getElementById(slot);
+            if (speaking) el.classList.add("speaking");
+            else el.classList.remove("speaking");
+        }
+
+        function createPeerConnection(peerId, peerName) {
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+            });
+
+            assignSlot(peerId, peerName);
+
+            // Add local audio
+            if (localStream && localStream.getAudioTracks().length > 0) {
+                pc.addTrack(localStream.getAudioTracks()[0], localStream);
+            }
+
+            // Play remote audio
+            pc.addEventListener("track", (ev) => {
+                const stream = ev.streams[0];
+                let audioEl = document.getElementById("audio-" + peerId);
+                if (!audioEl) {
+                    audioEl = document.createElement("audio");
+                    audioEl.id = "audio-" + peerId;
+                    audioEl.autoplay = true;
+                    audioEl.controls = false;
+                    audioEl.style.display = "none";
+                    document.body.appendChild(audioEl);
+
+                    // Visual speaking detection
+                    const audioCtx = new AudioContext();
+                    const analyser = audioCtx.createAnalyser();
+                    const source = audioCtx.createMediaStreamSource(stream);
+                    source.connect(analyser);
+                    const data = new Uint8Array(analyser.frequencyBinCount);
+
+                    function checkSpeaking() {
+                        analyser.getByteFrequencyData(data);
+                        const volume = data.reduce((a, b) => a + b) / data.length;
+                        markSpeaking(peerId, volume > 10); // Threshold for speaking
+                        requestAnimationFrame(checkSpeaking);
+                    }
+                    checkSpeaking();
+                }
+                audioEl.srcObject = stream;
+            });
+
+            pc.onicecandidate = (ev) => {
+                if (ev.candidate) {
+                    ws.send(
+                        JSON.stringify({
+                            type: "ice-candidate",
+                            to: peerId,
+                            data: ev.candidate,
+                        })
+                    );
+                }
+            };
+
+            pc.onconnectionstatechange = () => {
+                if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+                    closePeer(peerId);
+                }
+            };
+
+            return pc;
+        }
+
+        async function makeOffer(peerId, peerName) {
+            const pc = createPeerConnection(peerId, peerName);
+            peers.set(peerId, pc);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
+        }
+
+        async function handleOffer(fromId, offer, name) {
+            const pc = createPeerConnection(fromId, name);
+            peers.set(fromId, pc);
+            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            ws.send(JSON.stringify({ type: "answer", to: fromId, data: answer }));
+        }
+
+        async function handleAnswer(fromId, answer) {
+            const pc = peers.get(fromId);
+            if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+
+        async function handleCandidate(fromId, cand) {
+            const pc = peers.get(fromId);
+            if (pc) {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(cand));
+                } catch (e) {
+                    console.warn("Failed to add ICE candidate", e);
+                }
+            }
+        }
+
+        function closePeer(peerId) {
+            const pc = peers.get(peerId);
+            if (pc) {
+                pc.getSenders().forEach((s) => {
+                    try {
+                        pc.removeTrack(s);
+                    } catch (e) { }
+                });
+                try {
+                    pc.close();
+                } catch (e) { }
+                peers.delete(peerId);
+            }
+            const a = document.getElementById("audio-" + peerId);
+            if (a) a.remove();
+            removeSlot(peerId);
+        }
+
+        async function startWebSocket() {
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                document.getElementById("status").innerText = "Connected to signaling";
+            };
+
+            ws.onmessage = async (ev) => {
+                const msg = JSON.parse(ev.data);
+                if (msg.type === "peers") {
+                    for (const peer of msg.peers) {
+                        await makeOffer(peer.user_id, peer.name);
+                    }
+                } else if (msg.type === "peer-joined") {
+                    await makeOffer(msg.user_id, msg.name);
+                } else if (msg.type === "offer") {
+                    await handleOffer(msg.from, msg.data, msg.name);
+                } else if (msg.type === "answer") {
+                    await handleAnswer(msg.from, msg.data);
+                } else if (msg.type === "ice-candidate") {
+                    await handleCandidate(msg.from, msg.data);
+                } else if (msg.type === "peer-left") {
+                    closePeer(msg.user_id);
+                }
+            };
+
+            ws.onclose = () => {
+                document.getElementById("status").innerText = "Signaling disconnected";
+                for (const p of Array.from(peers.keys())) closePeer(p);
+            };
+        }
+
+        // Controls
+        document.getElementById("muteBtn").onclick = () => {
+            if (!localStream) return;
+            localStream.getAudioTracks().forEach((t) => (t.enabled = false));
+            document.getElementById("status").innerText = "Muted";
+        };
+
+        document.getElementById("unmuteBtn").onclick = () => {
+            if (!localStream) return;
+            localStream.getAudioTracks().forEach((t) => (t.enabled = true));
+            document.getElementById("status").innerText = "Unmuted";
+        };
+
+        document.getElementById("leaveBtn").onclick = () => {
+            if (ws) ws.close();
+            if (localStream) localStream.getTracks().forEach((t) => t.stop());
+            document.getElementById("status").innerText = "Left call";
+        };
+
+        // Auto-start
+        (async () => {
+            await initLocalMedia();
+            await startWebSocket();
+        })();
+
     </script>
 
-    <script src="script.js"></script>
 </body>
 
 </html>
