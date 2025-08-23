@@ -132,8 +132,7 @@ class AudioCallApp:
 <head><meta charset="utf-8"></head>
 <body>
 <div id="controls" class="control-bar">
-  <button id="muteBtn" class="control-btn">🔇 Mute</button>
-  <button id="unmuteBtn" class="control-btn">🎙️ Unmute</button>
+  <button id="muteToggle" class="control-btn">🎤 Mute</button>
   <button id="leaveBtn" class="control-btn leave">❌ Leave</button>
   <span id="status" style="margin-left:12px;color:#ddd;"></span>
 </div>
@@ -150,10 +149,10 @@ const USER = {json.dumps(user)};
 let localStream = null;
 let ws = null;
 const peers = new Map();  // userId -> RTCPeerConnection
+let isMuted = false;
 
 function updateParticipantsUI() {{
   const list = Array.from(peers.keys());
-  // include self visually
   if (!list.includes(USER)) list.unshift(USER);
   const container = document.getElementById('participants');
   container.innerHTML = '<b>Participants:</b> ' + list.map(x => '<span style="margin-left:8px">'+x+'</span>').join('');
@@ -172,7 +171,6 @@ async function initLocalMedia() {{
 function createPeerConnection(peerId) {{
   const pc = new RTCPeerConnection({{ iceServers: ICE_SERVERS }});
 
-  // Add local audio track to send to peer (if present)
   if (localStream && localStream.getAudioTracks().length > 0) {{
     try {{
       pc.addTrack(localStream.getAudioTracks()[0], localStream);
@@ -181,7 +179,6 @@ function createPeerConnection(peerId) {{
     }}
   }}
 
-  // Play remote audio stream
   pc.addEventListener('track', (ev) => {{
     const stream = ev.streams[0];
     let audioEl = document.getElementById('audio-' + peerId);
@@ -205,7 +202,6 @@ function createPeerConnection(peerId) {{
   }};
 
   pc.onconnectionstatechange = () => {{
-    console.log('pc state', peerId, pc.connectionState);
     if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') {{
       closePeer(peerId);
     }}
@@ -215,10 +211,7 @@ function createPeerConnection(peerId) {{
 }}
 
 async function makeOffer(peerId) {{
-  if (peers.has(peerId)) {{
-    console.log('already have pc for', peerId);
-    return;
-  }}
+  if (peers.has(peerId)) return;
   const pc = createPeerConnection(peerId);
   peers.set(peerId, pc);
   updateParticipantsUI();
@@ -232,7 +225,6 @@ async function makeOffer(peerId) {{
 }}
 
 async function handleOffer(fromId, offer) {{
-  console.log('handleOffer from', fromId);
   let pc;
   if (peers.has(fromId)) {{
     pc = peers.get(fromId);
@@ -248,7 +240,6 @@ async function handleOffer(fromId, offer) {{
 }}
 
 async function handleAnswer(fromId, answer) {{
-  console.log('handleAnswer from', fromId);
   const pc = peers.get(fromId);
   if (pc) {{
     await pc.setRemoteDescription(new RTCSessionDescription(answer));
@@ -283,23 +274,15 @@ function closePeer(peerId) {{
 async function startWebSocket() {{
   ws = new WebSocket(WS_URL);
   ws.onopen = () => {{
-    console.log('WS open', WS_URL);
     document.getElementById('status').innerText = "Connected to signaling";
   }};
 
   ws.onmessage = async (ev) => {{
     const msg = JSON.parse(ev.data);
-    console.log('ws msg', msg);
     if (msg.type === 'peers') {{
-      // this is the NEW client: create offers to existing peers
       for (const peerId of msg.peers) {{
         await makeOffer(peerId);
       }}
-      updateParticipantsUI();
-    }} else if (msg.type === 'peer-joined') {{
-      // an existing peer was informed that someone joined; do NOT create an offer here.
-      // The new peer will initiate offers to existing peers.
-      console.log('peer joined', msg.user_id);
       updateParticipantsUI();
     }} else if (msg.type === 'offer') {{
       await handleOffer(msg.from, msg.data);
@@ -313,31 +296,25 @@ async function startWebSocket() {{
   }};
 
   ws.onclose = () => {{
-    console.log('WS closed');
     document.getElementById('status').innerText = "Signaling disconnected";
     for (const p of Array.from(peers.keys())) closePeer(p);
   }};
-
-  ws.onerror = (e) => {{
-    console.error('WS error', e);
-  }};
 }}
 
-document.getElementById('muteBtn').onclick = () => {{
+document.getElementById('muteToggle').onclick = () => {{
   if (!localStream) return;
-  localStream.getAudioTracks().forEach(t => t.enabled = false);
-  document.getElementById('status').innerText = "Muted";
-}};
+  const track = localStream.getAudioTracks()[0];
+  if (!track) return;
 
-document.getElementById('unmuteBtn').onclick = () => {{
-  if (!localStream) return;
-  localStream.getAudioTracks().forEach(t => t.enabled = true);
-  document.getElementById('status').innerText = "Unmuted";
+  isMuted = !isMuted;
+  track.enabled = !isMuted;
+
+  document.getElementById('muteToggle').innerText = isMuted ? "🔇 Unmute" : "🎤 Mute";
+  document.getElementById('status').innerText = isMuted ? "Muted" : "Unmuted";
 }};
 
 document.getElementById('leaveBtn').onclick = async () => {{
   try {{
-    // inform backend room membership (so /room_info stays accurate)
     await fetch(BACKEND_HTTP + '/leave_room', {{
       method: 'POST',
       headers: {{ 'Content-Type': 'application/json' }},
@@ -351,7 +328,7 @@ document.getElementById('leaveBtn').onclick = async () => {{
   document.getElementById('status').innerText = "Left call";
 }};
 
-// Auto-start (init media then ws)
+// Auto-start
 (async () => {{
   await initLocalMedia();
   await startWebSocket();
