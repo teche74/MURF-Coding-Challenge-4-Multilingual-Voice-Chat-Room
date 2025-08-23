@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Voice Room</title>
+</head>
+
+<body>
+    <div id="controls" class="control-bar">
+        <button id="muteBtn" class="control-btn">🔇 Mute</button>
+        <button id="unmuteBtn" class="control-btn">🎙️ Unmute</button>
+        <button id="leaveBtn" class="control-btn leave">❌ Leave</button>
+        <span id="status" style="margin-left:12px;color:#ddd;"></span>
+    </div>
+
+    <!-- Config injected by backend -->
+    <script>
+        window.APP_CONFIG = {
+            WS_URL: {{ WS_URL }},
+        BACKEND_HTTP: { { BACKEND_HTTP } },
+        ROOM: { { ROOM } },
+        USER: { { USER } }
+    };
+    </script>
+
+    <!-- Main logic -->
+    <script src="script.js"></script>
+</body>
+
+</html>
