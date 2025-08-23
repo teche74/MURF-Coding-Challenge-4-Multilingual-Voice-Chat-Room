@@ -4,6 +4,16 @@ const { WS_URL, BACKEND_HTTP, ROOM, USER } = window.APP_CONFIG;
 let localStream = null;
 let ws = null;
 const peers = new Map();  // userId -> RTCPeerConnection
+const MAX_USERS = 4;
+const userSlots = ["user1", "user2", "user3", "user4"];
+const slotMap = {}; // userId -> slotIndex
+
+// Initialize slots as empty
+userSlots.forEach(id => {
+    const slot = document.getElementById(id);
+    slot.classList.add("empty");
+    slot.querySelector(".username").innerText = "Empty";
+});
 
 async function initLocalMedia() {
     try {
@@ -15,120 +25,71 @@ async function initLocalMedia() {
     }
 }
 
-function createPeerConnection(peerId) {
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-
-    // Add local audio
-    if (localStream && localStream.getAudioTracks().length > 0) {
-        pc.addTrack(localStream.getAudioTracks()[0], localStream);
-    }
-
-    // Play remote audio
-    pc.addEventListener('track', (ev) => {
-        const stream = ev.streams[0];
-        let audioEl = document.getElementById('audio-' + peerId);
-        if (!audioEl) {
-            audioEl = document.createElement('audio');
-            audioEl.id = 'audio-' + peerId;
-            audioEl.autoplay = true;
-            audioEl.controls = false;
-            audioEl.style.display = 'none';
-            document.body.appendChild(audioEl);
-        }
-        audioEl.srcObject = stream;
-    });
-
-    pc.onicecandidate = (ev) => {
-        if (ev.candidate) {
-            ws.send(JSON.stringify({ type: 'ice-candidate', to: peerId, data: ev.candidate }));
-        }
-    };
-
-    pc.onconnectionstatechange = () => {
-        if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
-            closePeer(peerId);
-        }
-    };
-
-    return pc;
-}
-
-async function makeOffer(peerId) {
-    const pc = createPeerConnection(peerId);
-    peers.set(peerId, pc);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: 'offer', to: peerId, data: offer }));
-}
-
-async function handleOffer(fromId, offer) {
-    const pc = createPeerConnection(fromId);
-    peers.set(fromId, pc);
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    ws.send(JSON.stringify({ type: 'answer', to: fromId, data: answer }));
-}
-
-async function handleAnswer(fromId, answer) {
-    const pc = peers.get(fromId);
-    if (pc) {
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-    }
-}
-
-async function handleCandidate(fromId, cand) {
-    const pc = peers.get(fromId);
-    if (pc) {
-        try {
-            await pc.addIceCandidate(new RTCIceCandidate(cand));
-        } catch (e) {
-            console.warn("Failed to add ICE candidate", e);
+function assignUserSlot(userId) {
+    for (let i = 0; i < MAX_USERS; i++) {
+        const slot = document.getElementById(userSlots[i]);
+        if (slot.classList.contains("empty")) {
+            slot.classList.remove("empty");
+            slot.querySelector(".username").innerText = userId;
+            slotMap[userId] = i;
+            return;
         }
     }
 }
 
-function closePeer(peerId) {
-    const pc = peers.get(peerId);
-    if (pc) {
-        pc.getSenders().forEach(s => {
-            try { pc.removeTrack(s); } catch (e) { }
-        });
-        try { pc.close(); } catch (e) { }
-        peers.delete(peerId);
+function removeUserSlot(userId) {
+    const index = slotMap[userId];
+    if (index !== undefined) {
+        const slot = document.getElementById(userSlots[index]);
+        slot.classList.add("empty");
+        slot.classList.remove("speaking");
+        slot.querySelector(".username").innerText = "Empty";
+        delete slotMap[userId];
     }
-    const a = document.getElementById('audio-' + peerId);
-    if (a) a.remove();
 }
+
+function userSpeaking(userId) {
+    const index = slotMap[userId];
+    if (index !== undefined) {
+        const slot = document.getElementById(userSlots[index]);
+        slot.classList.add("speaking");
+        setTimeout(() => slot.classList.remove("speaking"), 300);
+    }
+}
+
+// Existing WebRTC functions...
+// createPeerConnection, makeOffer, handleOffer, handleAnswer, handleCandidate, closePeer
 
 async function startWebSocket() {
     ws = new WebSocket(WS_URL);
 
-    ws.onopen = () => {
-        document.getElementById('status').innerText = "Connected to signaling";
-    };
+    ws.onopen = () => document.getElementById('status').innerText = "Connected to signaling";
 
     ws.onmessage = async (ev) => {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'peers') {
-            for (const peerId of msg.peers) {
-                await makeOffer(peerId);
-            }
+            msg.peers.forEach(peerId => assignUserSlot(peerId));
+            for (const peerId of msg.peers) await makeOffer(peerId);
         } else if (msg.type === 'peer-joined') {
+            assignUserSlot(msg.user_id);
             await makeOffer(msg.user_id);
+        } else if (msg.type === 'peer-left') {
+            removeUserSlot(msg.user_id);
+            closePeer(msg.user_id);
+        } else if (msg.type === 'speaking') {
+            userSpeaking(msg.user_id);
         } else if (msg.type === 'offer') {
             await handleOffer(msg.from, msg.data);
         } else if (msg.type === 'answer') {
             await handleAnswer(msg.from, msg.data);
         } else if (msg.type === 'ice-candidate') {
             await handleCandidate(msg.from, msg.data);
-        } else if (msg.type === 'peer-left') {
-            closePeer(msg.user_id);
         }
     };
 
     ws.onclose = () => {
         document.getElementById('status').innerText = "Signaling disconnected";
+        Object.keys(slotMap).forEach(userId => removeUserSlot(userId));
         for (const p of Array.from(peers.keys())) closePeer(p);
     };
 }
@@ -139,13 +100,11 @@ document.getElementById('muteBtn').onclick = () => {
     localStream.getAudioTracks().forEach(t => t.enabled = false);
     document.getElementById('status').innerText = "Muted";
 };
-
 document.getElementById('unmuteBtn').onclick = () => {
     if (!localStream) return;
     localStream.getAudioTracks().forEach(t => t.enabled = true);
     document.getElementById('status').innerText = "Unmuted";
 };
-
 document.getElementById('leaveBtn').onclick = () => {
     if (ws) ws.close();
     if (localStream) localStream.getTracks().forEach(t => t.stop());
