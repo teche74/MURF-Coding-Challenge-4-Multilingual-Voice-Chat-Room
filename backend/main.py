@@ -9,8 +9,8 @@ from starlette.responses import RedirectResponse
 import random, string, logging, os, sys, asyncio, time
 from typing import Dict, Optional, Tuple
 from dotenv import load_dotenv
-from speech_to_text_and_translation_utils import speech_to_text, translate_text
-from murf_api import generate_speech_from_text
+from backend.speech_to_text_and_translation_utils import speech_to_text, translate_text
+from backend.murf_api import generate_speech_from_text
 
 
 sys.path.append(os.path.dirname(__file__))
