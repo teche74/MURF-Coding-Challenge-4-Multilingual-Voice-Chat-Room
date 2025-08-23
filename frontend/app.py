@@ -1,69 +1,22 @@
-import sys, os
+import sys, os, json
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import requests
-import av
-import numpy as np
-import threading
-from collections import defaultdict, deque
-import random
+from streamlit.components.v1 import html as st_html
 
-_ROOM_BUFFERS = defaultdict(list)  
-_ROOM_LOCK = threading.Lock()
-MAX_CHUNKS = 8  
+BACKEND_URL = "https://murf-coding-challenge-4-multilingual.onrender.com" 
 
 
-class RoomAudioMixer(AudioProcessorBase):
-    def __init__(self) -> None:
-        self.room_code = None
-        self.my_buf = deque(maxlen=MAX_CHUNKS)
-
-    def on_start(self):
-        self.room_code = st.session_state.get("room_code")
-        if not self.room_code:
-            return
-        with _ROOM_LOCK:
-            _ROOM_BUFFERS[self.room_code].append(self.my_buf)
-
-    def on_ended(self):
-        if not self.room_code:
-            return
-        with _ROOM_LOCK:
-            try:
-                _ROOM_BUFFERS[self.room_code].remove(self.my_buf)
-                if not _ROOM_BUFFERS[self.room_code]:
-                    del _ROOM_BUFFERS[self.room_code]
-            except ValueError:
-                pass
-
-    def recv_audio(self, frame: av.AudioFrame) -> av.AudioFrame:
-        pcm = frame.to_ndarray() 
-        if pcm.ndim == 2:
-            pcm = pcm.mean(axis=0, keepdims=True) 
-
-        pcm = pcm.astype(np.float32)
-        self.my_buf.append(pcm.copy())
-
-        with _ROOM_LOCK:
-            buffers = _ROOM_BUFFERS.get(self.room_code, [])
-            other_streams = [b[-1] for b in buffers if (b is not self.my_buf and len(b) > 0)]
-
-        if other_streams:
-            min_len = min(s.shape[-1] for s in other_streams)
-            stack = np.stack([s[..., :min_len] for s in other_streams], axis=0)
-            mixed = stack.mean(axis=0)
-        else:
-            mixed = np.zeros_like(pcm)
-
-        out = (mixed * 32767.0).clip(-32768, 32767).astype(np.int16)
-        out_frame = av.AudioFrame.from_ndarray(out, layout="mono")
-        out_frame.sample_rate = getattr(frame, "sample_rate", 48000)
-        return out_frame
+def ws_url_from_backend(burl: str):
+    if burl.startswith("https://"):
+        return "wss://" + burl[len("https://"):]
+    if burl.startswith("http://"):
+        return "ws://" + burl[len("http://"):]
+    return burl
 
 class AudioCallApp:
     def __init__(self):
-        self.backend_url = "https://murf-coding-challenge-4-multilingual.onrender.com"
+        self.backend_url = BACKEND_URL
         self.muted = False
 
     def login(self):
@@ -128,7 +81,7 @@ class AudioCallApp:
                 color: white;
                 text-align: center;
                 box-shadow: 0px 0px 8px rgba(0,0,0,0.4);
-                min-height: 150px;
+                min-height: 120px;
                 transition: all 0.2s ease-in-out;
             }
             .active-speaker {
@@ -142,118 +95,247 @@ class AudioCallApp:
                 margin: 10px;
                 color: #777;
                 text-align: center;
-                min-height: 150px;
+                min-height: 120px;
             }
-            audio, video {
-                display: none !important;
+            audio { display: none; } /* hidden audio elements play remote audio */
+            .control-bar {
+                position: sticky; bottom: 0; padding: 12px; background: #0f0f0f; text-align:center;
             }
-            button[title="Stop"], button[title="Start"] {
-                display: none !important;
-            }
-            .stAudio, .stVideo, button[title="Start"], button[title="Stop"] {
-                display: none !important;
-            }
+            .control-btn { margin: 0 8px; padding: 10px 16px; border-radius: 999px; border:none; cursor:pointer; }
+            .leave { background: #b00020; color:#fff; }
             </style>
             """,
             unsafe_allow_html=True
         )
 
         st.subheader("Audio Call Room 🎤")
-        st.write(f"Room Code: {st.session_state['room_code']}")
+        room = st.session_state['room_code']
+        user = st.session_state['user_id']
 
-        # WebRTC audio-only
-        webrtc_ctx = webrtc_streamer(
-            key="audio_call",
-            mode=WebRtcMode.SENDRECV,
-            audio_receiver_size=1024,
-            sendback_audio=False,
-            media_stream_constraints={"audio": True, "video": True},
-            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-            video_html_attrs={"style": {"display": "none"}},
-            desired_playing_state=True,
-            audio_processor_factory=RoomAudioMixer, 
-        )
-
-        # Controls
-        col1, col2, col3 = st.columns([1,1,1])
-
-        with col1:
-            if st.button("🔇 Mute"):
-                if webrtc_ctx and webrtc_ctx.state.playing:
-                    webrtc_ctx.audio_receiver_enabled = False
-                    self.muted = True
-
-        with col2:
-            if st.button("🎙️ Unmute"):
-                if webrtc_ctx and webrtc_ctx.state.playing:
-                    webrtc_ctx.audio_receiver_enabled = True
-                    self.muted = False
-
-        with col3:
-            if st.button("❌ Leave Call"):
-                if "room_code" in st.session_state:
-                    del st.session_state["room_code"]
-                st.rerun()
-
-        # Get members
         try:
-            resp = requests.get(f"{self.backend_url}/room_info?room_code={st.session_state['room_code']}")
-            members = resp.json().get("members", [])
+            info = requests.get(f"{self.backend_url}/room_info", params={"room_code": room}).json()
+            members = info.get("members", [])
         except Exception:
             st.warning(f"Failed to fetch members: {e}")
             members = []
+        st.caption(f"Room Code: {room} • Members: {len(members)}")
 
-        # Simulated active speaker (you can replace with real audio-level detection later)
-        import random
-        active_speaker = random.choice(members) if members else None
+        ws_base = ws_url_from_backend(self.backend_url)
+        ws_url = f"{ws_base}/ws?room_code={room}&user_id={user}"
+        stun = "stun:stun.l.google.com:19302"
 
-        # WhatsApp-like grid
+        st_html(f"""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+</head>
+<body>
+<div id="controls" class="control-bar">
+  <button id="muteBtn" class="control-btn">🔇 Mute</button>
+  <button id="unmuteBtn" class="control-btn">🎙️ Unmute</button>
+  <button id="leaveBtn" class="control-btn leave">❌ Leave</button>
+  <span id="status" style="margin-left:12px;color:#ddd;"></span>
+</div>
+
+<script>
+const WS_URL = {json.dumps(ws_url)};
+const ICE_SERVERS = [{{ urls: "stun:stun.l.google.com:19302" }}];
+
+let localStream = null;
+let ws = null;
+const peers = new Map();  // userId -> RTCPeerConnection
+
+async function initLocalMedia() {{
+  try {{
+    localStream = await navigator.mediaDevices.getUserMedia({{ audio: true, video: false }});
+    document.getElementById('status').innerText = "Mic ready";
+  }} catch(e) {{
+    console.error("getUserMedia failed", e);
+    document.getElementById('status').innerText = "Mic access denied";
+  }}
+}}
+
+function createPeerConnection(peerId) {{
+  const pc = new RTCPeerConnection({{ iceServers: ICE_SERVERS }});
+
+  // Add local audio track to send to peer
+  if (localStream && localStream.getAudioTracks().length > 0) {{
+    pc.addTrack(localStream.getAudioTracks()[0], localStream);
+  }}
+
+  // When we get remote track, create hidden audio element and play it
+  pc.addEventListener('track', (ev) => {{
+    const stream = ev.streams[0];
+    let audioEl = document.getElementById('audio-' + peerId);
+    if (!audioEl) {{
+      audioEl = document.createElement('audio');
+      audioEl.id = 'audio-' + peerId;
+      audioEl.autoplay = true;
+      audioEl.controls = false;
+      audioEl.style.display = 'none';
+      document.body.appendChild(audioEl);
+    }}
+    audioEl.srcObject = stream;
+  }});
+
+  pc.onicecandidate = (ev) => {{
+    if (ev.candidate) {{
+      ws.send(JSON.stringify({{ type: 'ice-candidate', to: peerId, data: ev.candidate }}));
+    }}
+  }};
+
+  pc.onconnectionstatechange = () => {{
+    if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') {{
+      // cleanup
+      closePeer(peerId);
+    }}
+  }};
+
+  return pc;
+}}
+
+async function makeOffer(peerId) {{
+  const pc = createPeerConnection(peerId);
+  peers.set(peerId, pc);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  ws.send(JSON.stringify({{ type: 'offer', to: peerId, data: offer }}));
+}}
+
+async function handleOffer(fromId, offer) {{
+  const pc = createPeerConnection(fromId);
+  peers.set(fromId, pc);
+  await pc.setRemoteDescription(new RTCSessionDescription(offer));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  ws.send(JSON.stringify({{ type: 'answer', to: fromId, data: answer }}));
+}}
+
+async function handleAnswer(fromId, answer) {{
+  const pc = peers.get(fromId);
+  if (pc) {{
+    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+  }}
+}}
+
+async function handleCandidate(fromId, cand) {{
+  const pc = peers.get(fromId);
+  if (pc) {{
+    try {{
+      await pc.addIceCandidate(new RTCIceCandidate(cand));
+    }} catch (e) {{
+      console.warn("Failed to add ICE candidate", e);
+    }}
+  }}
+}}
+
+function closePeer(peerId) {{
+  const pc = peers.get(peerId);
+  if (pc) {{
+    pc.getSenders().forEach(s => {{
+      try {{ pc.removeTrack(s); }} catch(e){{}}
+    }});
+    try {{ pc.close(); }} catch(e){{}}
+    peers.delete(peerId);
+  }}
+  const a = document.getElementById('audio-' + peerId);
+  if (a) a.remove();
+}}
+
+async function startWebSocket() {{
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {{
+    document.getElementById('status').innerText = "Connected to signaling";
+  }};
+
+  ws.onmessage = async (ev) => {{
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'peers') {{
+      for (const peerId of msg.peers) {{
+        await makeOffer(peerId);
+      }}
+    }} else if (msg.type === 'peer-joined') {{
+      // small delay ok
+      await makeOffer(msg.user_id);
+    }} else if (msg.type === 'offer') {{
+      await handleOffer(msg.from, msg.data);
+    }} else if (msg.type === 'answer') {{
+      await handleAnswer(msg.from, msg.data);
+    }} else if (msg.type === 'ice-candidate') {{
+      await handleCandidate(msg.from, msg.data);
+    }} else if (msg.type === 'peer-left') {{
+      closePeer(msg.user_id);
+    }}
+  }};
+
+  ws.onclose = () => {{
+    document.getElementById('status').innerText = "Signaling disconnected";
+    // cleanup peers
+    for (const p of Array.from(peers.keys())) closePeer(p);
+  }};
+}}
+
+document.getElementById('muteBtn').onclick = () => {{
+  if (!localStream) return;
+  localStream.getAudioTracks().forEach(t => t.enabled = false);
+  document.getElementById('status').innerText = "Muted";
+}};
+
+document.getElementById('unmuteBtn').onclick = () => {{
+  if (!localStream) return;
+  localStream.getAudioTracks().forEach(t => t.enabled = true);
+  document.getElementById('status').innerText = "Unmuted";
+}};
+
+document.getElementById('leaveBtn').onclick = () => {{
+  if (ws) ws.close();
+  if (localStream) localStream.getTracks().forEach(t => t.stop());
+  document.getElementById('status').innerText = "Left call";
+}};
+
+// Auto-start
+(async () => {{
+  await initLocalMedia();
+  await startWebSocket();
+}})();
+</script>
+</body>
+</html>
+        """, height=120, scrolling=False)
+
         st.markdown("### Participants")
-        num_members = max(1, len(members))
-        cols_per_row = 2 if num_members <= 4 else 4
-        rows = (num_members + cols_per_row - 1) // cols_per_row
-
+        cols_per_row = 2 if len(members) <= 4 else 4
+        rows = (len(members) + cols_per_row - 1) // cols_per_row or 1
         for r in range(rows):
             cols = st.columns(cols_per_row)
             for c in range(cols_per_row):
-                idx = r * cols_per_row + c
-                if idx < num_members:
-                    user = members[idx]
-                    card_class = "participant-card"
-                    if user == active_speaker:
-                        card_class += " active-speaker"
+                i = r*cols_per_row + c
+                if i < len(members):
                     with cols[c]:
                         st.markdown(
-                            f"""
-                            <div class="{card_class}">
-                                <div style='font-size:40px;'>👤</div>
-                                <b>{user}</b><br>
-                                {"🔇 Muted" if self.muted else "🎙️ Speaking..."}
-                            </div>
-                            """,
+                            f"<div class='participant-card'>👤 <b>{members[i]}</b><br/><span style='opacity:.7'>Connected</span></div>",
                             unsafe_allow_html=True
                         )
                 else:
                     with cols[c]:
                         st.markdown(
-                            "<div class='empty-slot'>Empty Slot</div>",
+                            "<div class='empty-slot'>Empty</div>",
                             unsafe_allow_html=True
                         )
+
     def run(self):
         if "user_id" not in st.session_state:
             self.login()
             return
-
         if "room_code" not in st.session_state:
             self.show_room_options()
         else:
             self.run_audio_call()
 
-
 def main():
     app = AudioCallApp()
     app.run()
-
 
 if __name__ == "__main__":
     main()
