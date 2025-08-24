@@ -336,6 +336,20 @@ ROOM_HTML = """
             color: var(--accent);
         }
 
+        #status {
+            margin-top: 10px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            background-color: #f3f4f6; /* light gray */
+            color: #333;
+            display: inline-block;
+            transition: all 0.3s ease-in-out;
+        }
+
+
+
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -385,12 +399,14 @@ ROOM_HTML = """
         }
 
         button {
-            padding: 10px 14px;
-            border-radius: 10px;
+            margin: 8px 6px;
+            padding: 10px 18px;
+            font-size: 14px;
+            font-weight: 600;
             border: none;
+            border-radius: 8px;
             cursor: pointer;
-            background: #333;
-            color: #fff;
+            transition: transform 0.2s ease, background-color 0.3s ease;
         }
 
         button.primary {
@@ -433,6 +449,50 @@ ROOM_HTML = """
             font-size: 12px;
             opacity: 0.85;
         }
+
+        #muteBtn {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        #muteBtn:hover {
+            background-color: #dc2626;
+            transform: scale(1.05);
+        }
+
+        #muteBtn:disabled {
+            background-color: #fca5a5;
+            cursor: not-allowed;
+        }
+
+        #unmuteBtn {
+            background-color: #22c55e;
+            color: white;
+        }
+
+        #unmuteBtn:hover {
+            background-color: #16a34a;
+            transform: scale(1.05);
+        }
+
+        #unmuteBtn:disabled {
+            background-color: #86efac;
+            cursor: not-allowed;
+        }
+
+        #video-container {
+            margin-top: 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            overflow: hidden;
+            max-width: 400px;
+        }
+
+        #video-container video {
+            width: 100%;
+            height: auto;
+            border-radius: 10px;
+        }
     </style>
 </head>
 
@@ -463,6 +523,11 @@ ROOM_HTML = """
         <main class="main">
             <div class="status" id="status">Initializing...</div>
 
+
+            <div id="localVideoContainer" class="tile" style="max-width:220px; margin:0 auto; display:none;">
+                <div class="small">Your Video</div>
+            </div>
+
             <div class="grid" id="tiles">
             </div>
 
@@ -471,6 +536,13 @@ ROOM_HTML = """
                 <button id="muteBtn" disabled>🔇 Mute</button>
                 <button id="unmuteBtn" disabled>🎙️ Unmute</button>
                 <button id="leaveBtn">❌ Leave</button>
+            </div>
+
+            <div class="controls">
+                <label style="display:flex;align-items:center;gap:6px;">
+                    <input type="checkbox" id="useVideo" />
+                    🎥 Use video
+                </label>
             </div>
         </main>
     </div>
@@ -703,13 +775,34 @@ ROOM_HTML = """
                 });
 
                 try {
-                    const tracks = await createLocalTracks({ audio: true });
+                    const useVideo = document.getElementById('useVideo').checked;
+                    const tracks = await createLocalTracks({ audio: true , video : true});
                     if (tracks && tracks.length > 0) {
                         localAudioTrack = tracks.find(t => t.kind === Track.Kind.Audio);
                         await room.localParticipant.publishTrack(localAudioTrack);
-                        document.getElementById('status').innerText = "Published local audio";
-                        document.getElementById('muteBtn').disabled = false;
-                        document.getElementById('unmuteBtn').disabled = false;
+                        localVideoTrack = tracks.find(t => t.kind === Track.Kind.Video);
+
+                        if (localAudioTrack) {
+                            await room.localParticipant.publishTrack(localAudioTrack);
+                            document.getElementById('muteBtn').disabled = false;
+                            document.getElementById('unmuteBtn').disabled = false;
+                        }
+
+                        if (localVideoTrack) {
+                            await room.localParticipant.publishTrack(localVideoTrack);
+
+                            const videoEl = document.createElement('video');
+                            videoEl.autoplay = true;
+                            videoEl.playsInline = true;
+                            videoEl.muted = true; 
+                            localVideoTrack.attach(videoEl);
+
+                            const container = document.getElementById('localVideoContainer');
+                            container.style.display = "block";
+                            container.appendChild(videoEl);
+                        }
+
+                        document.getElementById('status').innerText = useVideo ? "Published local audio & video" : "Published local audio only" ;
                     } else {
                         document.getElementById('status').innerText = "No local tracks available";
                     }
