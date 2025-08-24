@@ -467,7 +467,7 @@ ROOM_HTML = """
             </div>
         </main>
     </div>
-
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@latest/dist/livekit-client.umd.min.js"></script>
     <script type="module">
         (async () => {
             const qs = new URLSearchParams(location.search);
