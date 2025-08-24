@@ -20,7 +20,6 @@ from backend.murf_api import generate_speech_from_text
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- env ---
 env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(env_path)
 
@@ -598,7 +597,7 @@ ROOM_HTML = """
         const USER = qs.get("user_id") || "";
         const BACKEND_HTTP = location.origin;
         const WS_URL = BACKEND_HTTP.replace(/^http/i, "ws") + "/ws?room_code=" + encodeURIComponent(ROOM) + "&user_id=" + encodeURIComponent(USER);
-        const FRONTEND_URL = {{ FRONTEND_URL_JSON }};
+        const FRONTEND_URL = {{FRONTEND_URL_JSON}};
 
         console.log("WS_URL", WS_URL, "HTTP", BACKEND_HTTP, "ROOM", ROOM, "USER", USER);
         document.getElementById('roomName').innerText = ROOM;
@@ -758,7 +757,6 @@ ROOM_HTML = """
     detectSpeaking();
 };
 
-
             pc.onicecandidate = (event) => {
                 if (event.candidate) {
                     ws?.send(JSON.stringify({
@@ -806,25 +804,20 @@ ROOM_HTML = """
                     return;
                 }
 
-                // Debug log
                 console.log("WS RX:", msg.type, "from", msg.from || msg.user_id || "(server)");
 
-                // chat
                 if (msg.type === "chat") {
                     addChatMessage(msg.from, msg.text, msg.from === USER);
                     return;
                 }
 
-                // initial peers list
                 if (msg.type === "peers") {
-                    // small stagger to avoid signaling storms
                     await new Promise(r => setTimeout(r, 50));
                     for (const peer of msg.peers) {
                         const peerId = peer.user_id;
                         assignSlot(peerId, peer.name || peerId);
                         const pc = await createPeerConnection(peerId);
 
-                        // Only one side should initiate to avoid glare
                         if (shouldInitiateWith(peerId)) {
                             try {
                                 const offer = await pc.createOffer();
@@ -841,7 +834,6 @@ ROOM_HTML = """
                     return;
                 }
 
-                // peer joined (single peer)
                 if (msg.type === "peer-joined") {
                     const peerId = msg.user_id;
                     assignSlot(peerId, msg.name || peerId);
@@ -861,12 +853,10 @@ ROOM_HTML = """
                     return;
                 }
 
-                // incoming offer: create/replace pc if necessary, set remote, answer
                 if (msg.type === "offer") {
                     const peerId = msg.from;
                     assignSlot(peerId, msg.name || peerId);
 
-                    // If we already have a pc but it's not stable, restart cleanly
                     if (peers.has(peerId)) {
                         const existing = peers.get(peerId);
                         if (existing.signalingState !== "stable") {
@@ -880,11 +870,9 @@ ROOM_HTML = """
                         await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
                     } catch (e) {
                         console.warn("setRemoteDescription(offer) failed for", peerId, e);
-                        // give up on this offer; hope sender retries
                         return;
                     }
-
-                    // mark remote desc ready and flush ICE queue
+            
                     remoteDescReady.set(peerId, true);
                     flushCandidates(peerId, pc);
 
@@ -899,7 +887,6 @@ ROOM_HTML = """
                     return;
                 }
 
-                // incoming answer: only accept when we're in have-local-offer
                 if (msg.type === "answer") {
                     const peerId = msg.from;
                     console.log("RX answer from", peerId);
@@ -909,12 +896,10 @@ ROOM_HTML = """
                         return;
                     }
 
-                    // only accept answer if we are expecting it
                     const state = pc.signalingState;
                     console.log("pc.signalingState before answer:", state);
                     if (state === "have-local-offer" || state === "have-local-pranswer") {
                         try {
-                            // avoid applying duplicate answer if already has remote
                             if (!pc.currentRemoteDescription || Object.keys(pc.currentRemoteDescription).length === 0) {
                                 await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
                                 remoteDescReady.set(peerId, true);
@@ -932,7 +917,6 @@ ROOM_HTML = """
                     return;
                 }
 
-                // ICE candidate
                 if (msg.type === "ice-candidate") {
                     const peerId = msg.from;
                     const pc = peers.get(peerId);
@@ -944,7 +928,6 @@ ROOM_HTML = """
                             console.warn("addIceCandidate error", e);
                         }
                     } else {
-                        // queue until remote desc is applied
                         addCandidateToQueue(peerId, candidate);
                     }
                     return;
@@ -955,7 +938,6 @@ ROOM_HTML = """
                     return;
                 }
 
-                // unknown message type
                 console.warn("Unknown WS message type:", msg.type);
             };
 
@@ -1012,22 +994,17 @@ ROOM_HTML = """
         })();
     </script>
 </body>
-
 </html>
-
 """
 
 @app.get("/room", response_class=HTMLResponse)
 async def room_page(room_code: str, user_id: str):
-    # validate to avoid joining random rooms/users
     room = rooms.get(room_code)
     if not room or user_id not in users or user_id not in room["members"]:
         return HTMLResponse("<h2>Invalid room or user. Please (re)join from the app.</h2>", status_code=400)
     page = ROOM_HTML.replace("{{FRONTEND_URL_JSON}}", json_dumps(FRONTEND_URL))
     return HTMLResponse(page)
 
-# tiny helper without importing stdlib json in many places above
 def json_dumps(x: str) -> str:
-    # minimal JSON string escape for safe inline JS
     import json as _json
     return _json.dumps(x)
