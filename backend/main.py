@@ -352,9 +352,18 @@ ROOM_HTML = """
 
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 18px;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            justify-items: center;
         }
+
+        .tile video {
+            width: 100%;
+            height: 120px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin-top: 6px;
+            }
 
         .tile {
             height: 160px;
@@ -493,6 +502,14 @@ ROOM_HTML = """
             height: auto;
             border-radius: 10px;
         }
+
+        .tile .video-slot video {
+            width: 100%;
+            height: 120px;
+            border-radius: 8px;
+            object-fit: cover;
+            margin-top: 6px;
+            }
     </style>
 </head>
 
@@ -777,10 +794,10 @@ ROOM_HTML = """
 
                 try {
                     const useVideo = document.getElementById('useVideo').checked;
-                    const tracks = await createLocalTracks({ audio: true , video : true});
+                    const tracks = await createLocalTracks({ audio: true , video : useVideo ? true : false});
+                    
                     if (tracks && tracks.length > 0) {
                         localAudioTrack = tracks.find(t => t.kind === Track.Kind.Audio);
-                        await room.localParticipant.publishTrack(localAudioTrack);
                         localVideoTrack = tracks.find(t => t.kind === Track.Kind.Video);
 
                         if (localAudioTrack) {
@@ -789,7 +806,7 @@ ROOM_HTML = """
                             document.getElementById('unmuteBtn').disabled = false;
                         }
 
-                        if (localVideoTrack) {
+                        if (useVideo && localVideoTrack) {
                             await room.localParticipant.publishTrack(localVideoTrack);
 
                             const videoEl = document.createElement('video');
@@ -809,7 +826,7 @@ ROOM_HTML = """
                     }
                 } catch (e) {
                     console.error("Failed to create/publish local tracks", e);
-                    document.getElementById('status').innerText = "Microphone access denied";
+                    document.getElementById('status').innerText = "Microphone/Camera access denied";
                 }
 
                 for (const p of room.participants.values()) {
@@ -838,6 +855,7 @@ ROOM_HTML = """
                 });
 
                 participant.on(RoomEvent.TrackSubscribed, (track, publication) => {
+                    
                     if (track.kind === Track.Kind.Audio) {
                         const langHint = (publication && publication.metadata) ? publication.metadata : null;
                         if (typeof langHint === 'string') {
@@ -852,11 +870,45 @@ ROOM_HTML = """
 
                         attachAudioTrack(track, participant.identity);
                     }
+                    if (track.kind === Track.Kind.Video) {
+                        const tile = tilesByIdentity.get(participant.identity);
+                        if (tile) {
+                            let videoEl = tile.querySelector("video");
+                            if (!videoEl) {
+                                videoEl = document.createElement("video");
+                                videoEl.autoplay = true;
+                                videoEl.playsInline = true;
+                                tile.appendChild(videoEl);
+                            }
+                            track.attach(videoEl);
+                        }
+                    }
                 });
 
-                for (const pub of participant.audioTracks.values()) {
+                for (const pub of participant.tracks.values()) {
                     if (pub.track) {
-                        attachAudioTrack(pub.track, participant.identity);
+                        if (pub.track.kind === Track.Kind.Audio) {
+                            attachAudioTrack(pub.track, participant.identity);
+                        }
+                        if (pub.track.kind === Track.Kind.Video) {
+                            const tile = tilesByIdentity.get(participant.identity);
+                            if (tile) {
+                                let videoWrap = tile.querySelector(".video-slot");
+                                if (!videoWrap) {
+                                    videoWrap = document.createElement("div");
+                                    videoWrap.className = "video-slot";
+                                    tile.appendChild(videoWrap);
+                                }
+                                let videoEl = videoWrap.querySelector("video");
+                                if (!videoEl) {
+                                    videoEl = document.createElement("video");
+                                    videoEl.autoplay = true;
+                                    videoEl.playsInline = true;
+                                    videoWrap.appendChild(videoEl);
+                                }
+                                track.attach(videoEl);
+                            }
+                        }
                     } else {
                         participant.subscribe(pub).catch(() => { });
                     }
