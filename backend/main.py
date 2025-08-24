@@ -241,13 +241,17 @@ def livekit_join_token(req: LiveKitJoinTokenReq):
                 if m["user_id"] == req.user_id:
                     m["language"] = req.language or m.get("language", "en")
 
-    if AccessToken is None or VideoGrant is None:
+    if AccessToken is None or VideoGrants is None:
         raise HTTPException(500, "LiveKit server SDK is not available on the server (check pip install).")
-
-    at = AccessToken().with_identity(req.user_id).with_name(req.name or req.user_id).with_grants(
-        VideoGrants(room_join=True, room=req.room_code, can_publish=True, can_subscribe=True, can_publish_data=True)
-    )
-    token_jwt = at.to_jwt()
+    
+    try:
+        at = AccessToken().with_identity(req.user_id).with_name(req.name or req.user_id).with_grants(
+            VideoGrants(room_join=True, room=req.room_code, can_publish=True, can_subscribe=True, can_publish_data=True)
+        )
+        token_jwt = at.to_jwt()
+    except Exception as e:
+        logger.error(f"Failed to generate token: {e}")
+        raise HTTPException(500, f"LiveKit token generation failed: {str(e)}")
     return {"token": token_jwt, "url": LIVEKIT_URL, "room_code": req.room_code}
 
 
