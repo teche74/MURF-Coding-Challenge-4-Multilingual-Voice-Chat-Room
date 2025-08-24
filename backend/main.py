@@ -326,17 +326,228 @@ async def ws_endpoint(websocket: WebSocket):
 ROOM_HTML = """
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Voice Room</title>
     <style>
         /* (styles unchanged — omitted for brevity here in the snippet but keep your full CSS) */
-        body { margin: 0; font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #0f2027, #203a43, #2c5364); color: #eee; display: flex; height: 100vh; }
-        
-        .app-container { display: flex; width: 100%; } .sidebar { width: 250px; background: rgba(0, 0, 0, 0.5); border-right: 1px solid rgba(255, 255, 255, 0.1); padding: 20px; backdrop-filter: blur(10px); display: flex; flex-direction: column; gap: 16px; } .room-title { font-size: 18px; color: #0ff; margin-bottom: 6px; } .participants-list { list-style: none; padding: 0; margin: 0; } .participants-list li { padding: 8px; margin: 4px 0; background: rgba(255, 255, 255, 0.05); border-radius: 8px; font-size: 14px; display: flex; justify-content: space-between; align-items: center; } .me-badge { background: #0ff; color: #000; font-size: 11px; border-radius: 6px; padding: 2px 6px; margin-left: 8px; } .main-content { flex: 1; display: flex; flex-direction: column; padding: 20px; } .status-bar { text-align: center; margin-bottom: 15px; font-size: 14px; color: #0ff; } .user-grid { display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr); gap: 20px; margin-bottom: 20px; } .user-card { width: 150px; height: 180px; border-radius: 20px; background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(8px); box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3); display: flex; flex-direction: column; align-items: center; justify-content: center; transition: all 0.3s ease; border: 1px solid rgba(255, 255, 255, 0.1); } .user-card .avatar { width: 80px; height: 80px; border-radius: 50%; background: rgba(255, 255, 255, 0.2); margin-bottom: 10px; display: flex; align-items: center; justify-content: center; font-size: 36px; } .user-card .username { color: #fcfcfc; font-weight: 600; text-align: center; } .user-card.speaking .avatar { box-shadow: 0 0 20px #00f2fe, 0 0 40px #4facfe; transform: scale(1.1); } .user-card.empty .avatar { background: rgba(255, 255, 255, 0.05); } .controls { display: flex; justify-content: center; gap: 20px; margin-bottom: 15px; } .control-btn { padding: 12px 18px; font-size: 16px; border: none; border-radius: 12px; cursor: pointer; background: #333; color: #eee; transition: all 0.2s ease; } .control-btn:hover { background: #444; } .leave { background: #b00020; color: #fff; } .leave:hover { background: #d00030; } .control-btn:disabled { opacity: 0.6; cursor: not-allowed; } .chat-box { flex: 1; display: flex; flex-direction: column; background: rgba(0, 0, 0, 0.4); border-radius: 12px; overflow: hidden; backdrop-filter: blur(5px); } .messages { flex: 1; padding: 10px; overflow-y: auto; } .message { margin: 6px 0; padding: 8px 12px; background: rgba(255, 255, 255, 0.05); border-radius: 8px; max-width: 85%; } .message.me { background: rgba(0, 255, 255, 0.2); align-self: flex-end; } .chat-input { display: flex; border-top: 1px solid rgba(255, 255, 255, 0.1); } .chat-input input { flex: 1; padding: 12px; border: none; outline: none; background: rgba(0, 0, 0, 0.5); color: #fff; } .chat-input button { padding: 0 20px; background: #0ff; border: none; color: #000; cursor: pointer; transition: 0.2s; } .chat-input button:hover { background: #0cc; }
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: #eee;
+            display: flex;
+            height: 100vh;
+        }
+
+        .app-container {
+            display: flex;
+            width: 100%;
+        }
+
+        .sidebar {
+            width: 250px;
+            background: rgba(0, 0, 0, 0.5);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .room-title {
+            font-size: 18px;
+            color: #0ff;
+            margin-bottom: 6px;
+        }
+
+        .participants-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .participants-list li {
+            padding: 8px;
+            margin: 4px 0;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .me-badge {
+            background: #0ff;
+            color: #000;
+            font-size: 11px;
+            border-radius: 6px;
+            padding: 2px 6px;
+            margin-left: 8px;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+        }
+
+        .status-bar {
+            text-align: center;
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: #0ff;
+        }
+
+        .user-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            grid-template-rows: repeat(2, 1fr);
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .user-card {
+            width: 150px;
+            height: 180px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(8px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .user-card .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+        }
+
+        .user-card .username {
+            color: #fcfcfc;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .user-card.speaking .avatar {
+            box-shadow: 0 0 20px #00f2fe, 0 0 40px #4facfe;
+            transform: scale(1.1);
+        }
+
+        .user-card.empty .avatar {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+
+        .control-btn {
+            padding: 12px 18px;
+            font-size: 16px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            background: #333;
+            color: #eee;
+            transition: all 0.2s ease;
+        }
+
+        .control-btn:hover {
+            background: #444;
+        }
+
+        .leave {
+            background: #b00020;
+            color: #fff;
+        }
+
+        .leave:hover {
+            background: #d00030;
+        }
+
+        .control-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .chat-box {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 12px;
+            overflow: hidden;
+            backdrop-filter: blur(5px);
+        }
+
+        .messages {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin: 6px 0;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            max-width: 85%;
+        }
+
+        .message.me {
+            background: rgba(0, 255, 255, 0.2);
+            align-self: flex-end;
+        }
+
+        .chat-input {
+            display: flex;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            outline: none;
+            background: rgba(0, 0, 0, 0.5);
+            color: #fff;
+        }
+
+        .chat-input button {
+            padding: 0 20px;
+            background: #0ff;
+            border: none;
+            color: #000;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .chat-input button:hover {
+            background: #0cc;
+        }
     </style>
 </head>
+
 <body>
     <div class="app-container">
         <aside class="sidebar">
@@ -387,7 +598,7 @@ ROOM_HTML = """
         const USER = qs.get("user_id") || "";
         const BACKEND_HTTP = location.origin;
         const WS_URL = BACKEND_HTTP.replace(/^http/i, "ws") + "/ws?room_code=" + encodeURIComponent(ROOM) + "&user_id=" + encodeURIComponent(USER);
-        const FRONTEND_URL = {{FRONTEND_URL_JSON}};
+        const FRONTEND_URL = {{ FRONTEND_URL_JSON }};
 
         console.log("WS_URL", WS_URL, "HTTP", BACKEND_HTTP, "ROOM", ROOM, "USER", USER);
         document.getElementById('roomName').innerText = ROOM;
@@ -523,9 +734,33 @@ ROOM_HTML = """
                     audio.id = "audio-" + peerId;
                     audio.autoplay = true;
                     audio.playsInline = true;
+                    audio.muted = false; // make sure remote audio is audible
                     document.body.appendChild(audio);
+                    // try to play immediately
+                    audio.play().catch(e => console.warn("Autoplay blocked", e));
                 }
                 audio.srcObject = event.streams[0];
+
+                // 2. Visual speaking indicator using Web Audio API
+                const el = document.getElementById(peerSlotMap.get(peerId));
+                if (!el) return;
+
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const analyser = audioContext.createAnalyser();
+                const source = audioContext.createMediaStreamSource(event.streams[0]);
+                source.connect(analyser);
+                analyser.fftSize = 256;
+
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                const detectSpeaking = () => {
+                    analyser.getByteFrequencyData(dataArray);
+                    const volume = dataArray.reduce((a, b) => a + b, 0);
+                    // threshold: tweak 30–80 depending on mic volume
+                    el.classList.toggle("speaking", volume > 50);
+                    requestAnimationFrame(detectSpeaking);
+                };
+                detectSpeaking();
             };
 
             pc.onicecandidate = (event) => {
@@ -782,6 +1017,7 @@ ROOM_HTML = """
         })();
     </script>
 </body>
+
 </html>
 
 """
