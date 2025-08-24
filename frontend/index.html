@@ -276,7 +276,7 @@
             ROOM: {{ ROOM }},
             USER: {{ USER }}
         };
-        
+
         const { WS_URL, BACKEND_HTTP, ROOM, USER } = window.APP_CONFIG;
 
         console.log(WS_URL , BACKEND_HTTP , ROOM , USER)
@@ -549,13 +549,7 @@
             await initLocalMedia();
             await startWebSocket();
         })();
-
-        window.addEventListener("click", () => {
-            try {
-                const ac = new (window.AudioContext || window.webkitAudioContext)();
-                if (ac.state === "suspended") ac.resume();
-            } catch { }
-        }, { once: true });
+        
     </script>
 
 </body>
