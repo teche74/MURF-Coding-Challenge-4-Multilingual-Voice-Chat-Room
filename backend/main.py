@@ -728,40 +728,42 @@ ROOM_HTML = """
             if (localStream) localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
             pc.ontrack = (event) => {
-                let audio = document.getElementById("audio-" + peerId);
-                if (!audio) {
-                    audio = document.createElement("audio");
-                    audio.id = "audio-" + peerId;
-                    audio.autoplay = true;
-                    audio.playsInline = true;
-                    audio.muted = false; // make sure remote audio is audible
-                    document.body.appendChild(audio);
-                    // try to play immediately
-                    audio.play().catch(e => console.warn("Autoplay blocked", e));
-                }
-                audio.srcObject = event.streams[0];
+    // 1. Get or create audio element
+    let audio = document.getElementById("audio-" + peerId);
+    if (!audio) {
+        audio = document.createElement("audio");
+        audio.id = "audio-" + peerId;
+        audio.autoplay = true;
+        audio.playsInline = true;
+        audio.muted = false; // make sure remote audio is audible
+        document.body.appendChild(audio);
+        // try to play immediately
+        audio.play().catch(e => console.warn("Autoplay blocked", e));
+    }
+    audio.srcObject = event.streams[0];
 
-                // 2. Visual speaking indicator using Web Audio API
-                const el = document.getElementById(peerSlotMap.get(peerId));
-                if (!el) return;
+    // 2. Visual speaking indicator using Web Audio API
+    const el = document.getElementById(peerSlotMap.get(peerId));
+    if (!el) return;
 
-                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const analyser = audioContext.createAnalyser();
-                const source = audioContext.createMediaStreamSource(event.streams[0]);
-                source.connect(analyser);
-                analyser.fftSize = 256;
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(event.streams[0]);
+    source.connect(analyser);
+    analyser.fftSize = 256;
 
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-                const detectSpeaking = () => {
-                    analyser.getByteFrequencyData(dataArray);
-                    const volume = dataArray.reduce((a, b) => a + b, 0);
-                    // threshold: tweak 30–80 depending on mic volume
-                    el.classList.toggle("speaking", volume > 50);
-                    requestAnimationFrame(detectSpeaking);
-                };
-                detectSpeaking();
-            };
+    const detectSpeaking = () => {
+        analyser.getByteFrequencyData(dataArray);
+        const volume = dataArray.reduce((a, b) => a + b, 0);
+        // threshold: tweak 30–80 depending on mic volume
+        el.classList.toggle("speaking", volume > 50);
+        requestAnimationFrame(detectSpeaking);
+    };
+    detectSpeaking();
+};
+
 
             pc.onicecandidate = (event) => {
                 if (event.candidate) {
