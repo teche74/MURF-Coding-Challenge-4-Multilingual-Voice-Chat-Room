@@ -88,6 +88,8 @@ class AudioCallApp:
     def show_room_options(self):
         st.markdown("<div class='subheader'>🛠 Choose Your Room Option</div>", unsafe_allow_html=True)
 
+        language = st.selectbox("🌐 Choose Your Language", ["en", "es", "fr", "hi", "de"], key="language")
+
         col1, col2 = st.columns(2)
 
         with col1:
@@ -96,9 +98,10 @@ class AudioCallApp:
             public = st.checkbox("🌍 Public Room?", value=True)
             if st.button("🚀 Create Room"):
                 resp = requests.post(f"{self.backend_url}/create_room",
-                                    json={"user_id": st.session_state['user_id'], "public": public})
+                                    json={"user_id": st.session_state['user_id'], "public": public , "language" : language})
                 if resp.status_code == 200:
                     st.session_state['room_code'] = resp.json()["room_code"]
+                    st.session_state['language'] = language
                     st.success(f"🎉 Room created: `{st.session_state['room_code']}`")
                     st.rerun()
                 else:
@@ -111,9 +114,10 @@ class AudioCallApp:
             room_code = st.text_input("Room Code")
             if st.button("➡️ Join Room"):
                 resp = requests.post(f"{self.backend_url}/join_room",
-                                    json={"user_id": st.session_state['user_id'], "room_code": room_code or None})
+                                    json={"user_id": st.session_state['user_id'], "room_code": room_code or None , "language" : language})
                 if resp.status_code == 200:
                     st.session_state['room_code'] = resp.json()["room_code"]
+                    st.session_state['language']  = language
                     st.success(f"✅ Joined room: `{st.session_state['room_code']}`")
                     st.rerun()
                 else:
@@ -125,6 +129,7 @@ class AudioCallApp:
 
         room = st.session_state['room_code']
         user = st.session_state['user_id']
+        language = st.session_state['language']
 
         st.markdown(f"""
             <div class="glass-card" style="text-align:center;">
@@ -134,7 +139,7 @@ class AudioCallApp:
             </div>
         """, unsafe_allow_html=True)
 
-        room_url = f"{self.backend_url}/room?room_code={quote(room)}&user_id={quote(user)}"
+        room_url = f"{self.backend_url}/room?room_code={quote(room)}&user_id={quote(user)}&lang={quote(language)}"
         st.link_button("🚪 Enter Room (opens in new tab)", room_url, use_container_width=True)
         st.info("Keep this tab open for creating/sharing rooms. The voice room opens in a new tab with mic access.")
 
