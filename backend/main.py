@@ -359,15 +359,20 @@ ROOM_HTML = """
         }
 
         .avatar {
-            width: 72px;
-            height: 72px;
+            width: 50px;   /* adjust size */
+            height: 50px;
             border-radius: 50%;
-            background: rgba(255, 255, 255, 0.12);
+            overflow: hidden;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 28px;
-            margin-bottom: 8px;
+            background: #e0e0e0; /* fallback background */
+            }
+
+            .avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
         }
 
         .controls {
@@ -479,7 +484,7 @@ ROOM_HTML = """
             document.getElementById('roomName').innerText = ROOM || "[unknown]";
 
             const TOKEN_ENDPOINT = BACKEND_URL + "/livekit/join-token";
-
+            console.log("ENDPOINT : ", TOKEN_ENDPOINT)
             let lk;
             try {
                 lk = await import('https://cdn.skypack.dev/livekit-client@^1.5.0');
@@ -525,7 +530,9 @@ ROOM_HTML = """
                 div.className = "tile";
                 div.id = "tile-" + btoa(identity).replace(/=/g, '');
                 div.innerHTML = `
-        <div class="avatar">🙂</div>
+        <div class="avatar">
+            <img src="data:image/png;base64,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" alt="Default Avatar">
+        </div>
         <div class="username">${displayName || identity}</div>
         <div class="small" style="margin-top:8px;">lang: <span class="lang">-</span></div>
       `;
@@ -651,6 +658,7 @@ ROOM_HTML = """
                 document.getElementById('status').innerText = "Connecting to LiveKit...";
 
                 try {
+                console.log("livekit url : ", livekitUrl)
                     room = new Room();
                     await room.connect(livekitUrl, token, { name: USER });
                 } catch (e) {
