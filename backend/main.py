@@ -245,7 +245,7 @@ def livekit_join_token(req: LiveKitJoinTokenReq):
         raise HTTPException(500, "LiveKit server SDK is not available on the server (check pip install).")
     
     try:
-        at = AccessToken().with_identity(req.user_id).with_name(req.name or req.user_id).with_grants(
+        at = AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET).with_identity(req.user_id).with_name(req.name or req.user_id).with_grants(
             VideoGrants(room_join=True, room=req.room_code, can_publish=True, can_subscribe=True, can_publish_data=True)
         )
         token_jwt = at.to_jwt()
@@ -467,7 +467,7 @@ ROOM_HTML = """
             </div>
         </main>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/livekit-client@latest/dist/livekit-client.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <script type="module">
         (async () => {
             const qs = new URLSearchParams(location.search);
