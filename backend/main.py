@@ -572,6 +572,7 @@ ROOM_HTML = """
 
             let room = null;
             let localAudioTrack = null;
+            let localVideoTrack = null;
             let audioCtx = null;
             let joined = false;
             const participants = new Map();
