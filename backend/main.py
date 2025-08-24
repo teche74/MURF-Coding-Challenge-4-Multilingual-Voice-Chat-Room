@@ -477,7 +477,7 @@ ROOM_HTML = """
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <script type="module">
         const BACKEND_URL = "{{BACKEND_URL}}";
-        const FRONTEND_URL = "{{FRONTEND_URL_JSON}}";
+        const FRONTEND_URL = "{{FRONTEND_URL}}";
         (async () => {
             const qs = new URLSearchParams(location.search);
             const ROOM = qs.get("room_code") || "";
@@ -845,7 +845,7 @@ async def room_page(room_code: str, user_id: str):
         return HTMLResponse("<h2>Invalid room or user. Please (re)join from the app.</h2>", status_code=400)
     page = ROOM_HTML
     page = page.replace("{{BACKEND_URL}}", BACKEND_URL)
-    page = page.replace("{{FRONTEND_URL_JSON}}", json_dumps(FRONTEND_URL))
+    page = page.replace("{{FRONTEND_URL}}", FRONTEND_URL)
     return HTMLResponse(page)
 
 
