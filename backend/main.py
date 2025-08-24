@@ -359,17 +359,19 @@ ROOM_HTML = """
         }
 
         .avatar {
-            width: 50px;   /* adjust size */
+            width: 50px;
+            /* adjust size */
             height: 50px;
             border-radius: 50%;
             overflow: hidden;
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #e0e0e0; /* fallback background */
-            }
+            background: #e0e0e0;
+            /* fallback background */
+        }
 
-            .avatar img {
+        .avatar img {
             width: 100%;
             height: 100%;
             object-fit: cover;
@@ -474,13 +476,13 @@ ROOM_HTML = """
     </div>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <script type="module">
-        const BACKEND_URL = "{{BACKEND_URL}}"; 
-        const FRONTEND_URL = {{FRONTEND_URL_JSON}};
+        const BACKEND_URL = "{{BACKEND_URL}}";
+        const FRONTEND_URL = "{{FRONTEND_URL_JSON}}";
         (async () => {
             const qs = new URLSearchParams(location.search);
             const ROOM = qs.get("room_code") || "";
             const USER = qs.get("user_id") || "";
-            const MY_LANG = qs.get("lang") || ""; 
+            const MY_LANG = qs.get("lang") || "";
             document.getElementById('roomName').innerText = ROOM || "[unknown]";
 
             const TOKEN_ENDPOINT = BACKEND_URL + "/livekit/join-token";
@@ -500,9 +502,9 @@ ROOM_HTML = """
             let localAudioTrack = null;
             let audioCtx = null;
             let joined = false;
-            const participants = new Map(); 
-            const tilesByIdentity = new Map(); 
-            const preferredLanguage = MY_LANG || ''; 
+            const participants = new Map();
+            const tilesByIdentity = new Map();
+            const preferredLanguage = MY_LANG || '';
 
 
             function addParticipantListEntry(id, name, isMe = false) {
@@ -592,7 +594,7 @@ ROOM_HTML = """
                 audio.autoplay = true;
                 audio.playsInline = true;
                 audio.controls = false;
-                audio.muted = false; 
+                audio.muted = false;
                 audio.style.display = "none";
                 document.body.appendChild(audio);
                 const el = track.attach();
@@ -658,7 +660,7 @@ ROOM_HTML = """
                 document.getElementById('status').innerText = "Connecting to LiveKit...";
 
                 try {
-                console.log("livekit url : ", livekitUrl)
+                    console.log("livekit url : ", livekitUrl)
                     room = new Room();
                     await room.connect(livekitUrl, token, { name: USER });
                 } catch (e) {
@@ -737,7 +739,7 @@ ROOM_HTML = """
                 }
 
                 participant.on(RoomEvent.TrackPublished, (publication) => {
-                    
+
                     console.log("published", publication.trackSid, publication);
                 });
 
@@ -771,14 +773,14 @@ ROOM_HTML = """
                 participants.delete(participant.identity);
                 removeParticipantListEntry(participant.identity);
                 removeTile(participant.identity);
-                
+
                 const audioEl = document.getElementById("audio-" + btoa(participant.identity).replace(/=/g, ''));
                 if (audioEl) audioEl.remove();
             }
 
-            
+
             document.getElementById("joinBtn").addEventListener("click", async () => {
-                
+
                 ensureAudioContext();
                 if (!joined) {
                     await joinCall();
@@ -807,9 +809,9 @@ ROOM_HTML = """
                     joined = false;
                     document.getElementById('status').innerText = "Left";
                 }
-                
+
                 const redirect = (typeof FRONTEND_URL !== 'undefined') ? FRONTEND_URL : "/";
-                
+
             });
 
             document.getElementById("sendChatBtn").addEventListener("click", async () => {
@@ -817,15 +819,15 @@ ROOM_HTML = """
                 const text = input.value.trim();
                 if (!text || !room) return;
                 const payload = JSON.stringify({ type: "chat", from: USER, text });
-                
+
                 room.localParticipant.publishData(new TextEncoder().encode(payload), DataPacket_Kind.RELIABLE);
                 addChatMessage(USER, text, true);
                 input.value = "";
             });
 
-            
+
             window.__lk_room = () => room;
-            
+
             document.getElementById('status').innerText = "Ready — click Join Call to start";
 
             if (preferredLanguage) document.getElementById('myLang').innerText = preferredLanguage;
