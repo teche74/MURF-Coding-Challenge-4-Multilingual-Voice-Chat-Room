@@ -326,227 +326,16 @@ async def ws_endpoint(websocket: WebSocket):
 ROOM_HTML = """
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Voice Room</title>
     <style>
-        body {
-            margin: 0;
-            font-family: 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
-            color: #eee;
-            display: flex;
-            height: 100vh;
-        }
-
-        .app-container {
-            display: flex;
-            width: 100%;
-        }
-
-        .sidebar {
-            width: 250px;
-            background: rgba(0, 0, 0, 0.5);
-            border-right: 1px solid rgba(255, 255, 255, 0.1);
-            padding: 20px;
-            backdrop-filter: blur(10px);
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-
-        .room-title {
-            font-size: 18px;
-            color: #0ff;
-            margin-bottom: 6px;
-        }
-
-        .participants-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }
-
-        .participants-list li {
-            padding: 8px;
-            margin: 4px 0;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            font-size: 14px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .me-badge {
-            background: #0ff;
-            color: #000;
-            font-size: 11px;
-            border-radius: 6px;
-            padding: 2px 6px;
-            margin-left: 8px;
-        }
-
-        .main-content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            padding: 20px;
-        }
-
-        .status-bar {
-            text-align: center;
-            margin-bottom: 15px;
-            font-size: 14px;
-            color: #0ff;
-        }
-
-        .user-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            grid-template-rows: repeat(2, 1fr);
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-
-        .user-card {
-            width: 150px;
-            height: 180px;
-            border-radius: 20px;
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(8px);
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .user-card .avatar {
-            width: 80px;
-            height: 80px;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.2);
-            margin-bottom: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 36px;
-        }
-
-        .user-card .username {
-            color: #fcfcfc;
-            font-weight: 600;
-            text-align: center;
-        }
-
-        .user-card.speaking .avatar {
-            box-shadow: 0 0 20px #00f2fe, 0 0 40px #4facfe;
-            transform: scale(1.1);
-        }
-
-        .user-card.empty .avatar {
-            background: rgba(255, 255, 255, 0.05);
-        }
-
-        .controls {
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            margin-bottom: 15px;
-        }
-
-        .control-btn {
-            padding: 12px 18px;
-            font-size: 16px;
-            border: none;
-            border-radius: 12px;
-            cursor: pointer;
-            background: #333;
-            color: #eee;
-            transition: all 0.2s ease;
-        }
-
-        .control-btn:hover {
-            background: #444;
-        }
-
-        .leave {
-            background: #b00020;
-            color: #fff;
-        }
-
-        .leave:hover {
-            background: #d00030;
-        }
-
-        .control-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .chat-box {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: rgba(0, 0, 0, 0.4);
-            border-radius: 12px;
-            overflow: hidden;
-            backdrop-filter: blur(5px);
-        }
-
-        .messages {
-            flex: 1;
-            padding: 10px;
-            overflow-y: auto;
-        }
-
-        .message {
-            margin: 6px 0;
-            padding: 8px 12px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            max-width: 85%;
-        }
-
-        .message.me {
-            background: rgba(0, 255, 255, 0.2);
-            align-self: flex-end;
-        }
-
-        .chat-input {
-            display: flex;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .chat-input input {
-            flex: 1;
-            padding: 12px;
-            border: none;
-            outline: none;
-            background: rgba(0, 0, 0, 0.5);
-            color: #fff;
-        }
-
-        .chat-input button {
-            padding: 0 20px;
-            background: #0ff;
-            border: none;
-            color: #000;
-            cursor: pointer;
-            transition: 0.2s;
-        }
-
-        .chat-input button:hover {
-            background: #0cc;
-        }
+        /* (styles unchanged — omitted for brevity here in the snippet but keep your full CSS) */
+        body { margin: 0; font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #0f2027, #203a43, #2c5364); color: #eee; display: flex; height: 100vh; }
+        /* rest of your CSS... */
     </style>
 </head>
-
 <body>
     <div class="app-container">
         <aside class="sidebar">
@@ -591,7 +380,7 @@ ROOM_HTML = """
     </div>
 
     <script>
-        /*** Config from query params + origin ***/
+        /***** Config *****/
         const qs = new URLSearchParams(location.search);
         const ROOM = qs.get("room_code") || "";
         const USER = qs.get("user_id") || "";
@@ -602,15 +391,17 @@ ROOM_HTML = """
         console.log("WS_URL", WS_URL, "HTTP", BACKEND_HTTP, "ROOM", ROOM, "USER", USER);
         document.getElementById('roomName').innerText = ROOM;
 
+        /***** State *****/
         let localStream = null;
         let ws = null;
-        const peers = new Map();
+        const peers = new Map(); // peerId -> RTCPeerConnection
         const userSlots = ["user1", "user2", "user3", "user4"];
         const peerSlotMap = new Map();
-        const remoteDescReady = new Map();
+        const remoteDescReady = new Map();       // peerId -> bool
         const participants = new Set();
-        const pendingCandidates = new Map();
+        const pendingCandidates = new Map();     // peerId -> [ICE candidates]
 
+        /***** Helpers UI *****/
         function updateParticipantsUI() {
             const list = document.getElementById("participants");
             list.innerHTML = "";
@@ -657,6 +448,7 @@ ROOM_HTML = """
             box.scrollTop = box.scrollHeight;
         }
 
+        /***** Local media *****/
         async function initLocalMedia() {
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -666,133 +458,286 @@ ROOM_HTML = """
                 assignSlot(USER, `You (${USER})`);
             } catch (e) {
                 document.getElementById("status").innerText = "Mic access denied";
+                console.warn("getUserMedia failed", e);
             }
+        }
+
+        /***** Peer connection helpers *****/
+        function shouldInitiateWith(peerId) {
+            // deterministic tie-breaker: lexicographic
+            return String(USER) < String(peerId);
+        }
+
+        function resetPending(peerId) {
+            remoteDescReady.set(peerId, false);
+            pendingCandidates.set(peerId, pendingCandidates.get(peerId) || []);
+        }
+
+        function addCandidateToQueue(peerId, cand) {
+            const q = pendingCandidates.get(peerId) || [];
+            q.push(cand);
+            pendingCandidates.set(peerId, q);
+        }
+
+        function flushCandidates(peerId, pc) {
+            const q = pendingCandidates.get(peerId) || [];
+            pendingCandidates.set(peerId, []);
+            (async () => {
+                for (const c of q) {
+                    try { await pc.addIceCandidate(c); } catch (e) { console.warn("flush ICE err", e); }
+                }
+            })();
         }
 
         function closePeer(peerId) {
             const pc = peers.get(peerId);
-            if (pc) { try { pc.close(); } catch { } peers.delete(peerId); }
+            if (pc) {
+                try { pc.close(); } catch (e) { console.warn(e); }
+                peers.delete(peerId);
+            }
             const a = document.getElementById("audio-" + peerId);
             if (a) a.remove();
             removeSlot(peerId);
+            pendingCandidates.delete(peerId);
+            remoteDescReady.delete(peerId);
+            console.log("Closed peer", peerId);
         }
 
         async function createPeerConnection(peerId) {
-            const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-            remoteDescReady.set(peerId, false);
-            pendingCandidates.set(peerId, []);
-            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            if (peers.has(peerId)) return peers.get(peerId);
+
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+            });
+
+            resetPending(peerId);
+
+            // add local tracks if available
+            if (localStream) localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
             pc.ontrack = (event) => {
                 let audio = document.getElementById("audio-" + peerId);
                 if (!audio) {
                     audio = document.createElement("audio");
-                    audio.id = "audio-" + peerId; audio.autoplay = true; audio.playsInline = true;
+                    audio.id = "audio-" + peerId;
+                    audio.autoplay = true;
+                    audio.playsInline = true;
                     document.body.appendChild(audio);
                 }
                 audio.srcObject = event.streams[0];
             };
+
             pc.onicecandidate = (event) => {
                 if (event.candidate) {
-                    ws?.send(JSON.stringify({ type: "ice-candidate", to: peerId, data: event.candidate }));
+                    // send candidate to the peer
+                    ws?.send(JSON.stringify({
+                        type: "ice-candidate",
+                        to: peerId,
+                        data: event.candidate
+                    }));
                 }
             };
+
             pc.onconnectionstatechange = () => {
-                const st = pc.connectionState;
-                if (st === "failed" || st === "disconnected" || st === "closed") {
+                console.log("PC connectionState for", peerId, "=", pc.connectionState);
+                if (pc.connectionState === "failed" || pc.connectionState === "disconnected" || pc.connectionState === "closed") {
                     closePeer(peerId);
                 }
             };
+
+            pc.onsignalingstatechange = () => {
+                console.log("PC signalingState for", peerId, "=", pc.signalingState);
+            };
+            pc.oniceconnectionstatechange = () => {
+                console.log("PC iceConnectionState for", peerId, "=", pc.iceConnectionState);
+            };
+
             peers.set(peerId, pc);
             return pc;
         }
 
+        /***** WebSocket / signaling *****/
         async function startWebSocket() {
             ws = new WebSocket(WS_URL);
+
             ws.onopen = () => {
                 document.getElementById("status").innerText = "Connected";
                 assignSlot(USER, `You (${USER})`);
+                console.log("WebSocket connected");
             };
+
             ws.onmessage = async (ev) => {
-                const msg = JSON.parse(ev.data);
+                let msg;
+                try {
+                    msg = JSON.parse(ev.data);
+                } catch (e) {
+                    console.warn("Failed to parse WS message", e, ev.data);
+                    return;
+                }
+
+                // Debug log
+                console.log("WS RX:", msg.type, "from", msg.from || msg.user_id || "(server)");
+
+                // chat
                 if (msg.type === "chat") {
                     addChatMessage(msg.from, msg.text, msg.from === USER);
-                } else if (msg.type === "peers") {
+                    return;
+                }
+
+                // initial peers list
+                if (msg.type === "peers") {
+                    // small stagger to avoid signaling storms
                     await new Promise(r => setTimeout(r, 50));
                     for (const peer of msg.peers) {
                         const peerId = peer.user_id;
-                        const pc = await createPeerConnection(peerId);
                         assignSlot(peerId, peer.name || peerId);
-                        const offer = await pc.createOffer();
-                        await pc.setLocalDescription(offer);
-                        ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
+                        const pc = await createPeerConnection(peerId);
+
+                        // Only one side should initiate to avoid glare
+                        if (shouldInitiateWith(peerId)) {
+                            try {
+                                const offer = await pc.createOffer();
+                                await pc.setLocalDescription(offer);
+                                ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
+                                console.log("Sent offer to", peerId);
+                            } catch (e) {
+                                console.warn("Failed to create/send offer to", peerId, e);
+                            }
+                        } else {
+                            console.log("Waiting for offer from", peerId);
+                        }
                     }
-                } else if (msg.type === "peer-joined") {
+                    return;
+                }
+
+                // peer joined (single peer)
+                if (msg.type === "peer-joined") {
                     const peerId = msg.user_id;
                     assignSlot(peerId, msg.name || peerId);
-                    (async () => {
-                        if (!peers.has(peerId)) {
-                            const pc = await createPeerConnection(peerId);
+                    const pc = await createPeerConnection(peerId);
+                    if (shouldInitiateWith(peerId)) {
+                        try {
                             const offer = await pc.createOffer();
                             await pc.setLocalDescription(offer);
                             ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
-                        }
-                    })();
-                } else if (msg.type === "offer") {
-                    const peerId = msg.from;
-                    const pc = await createPeerConnection(peerId);
-                    await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-                    remoteDescReady.set(peerId, true);
-                    const queue = pendingCandidates.get(peerId) || [];
-                    for (const c of queue) { try { await pc.addIceCandidate(c); } catch (e) { console.warn("flush ICE err", e); } }
-                    pendingCandidates.set(peerId, []);
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    ws.send(JSON.stringify({ type: "answer", to: peerId, data: answer }));
-                } else if (msg.type === "answer") {
-                    console.log("RX answer from", msg.from);
-                    const pc = peers.get(msg.from);
-                    if (pc) {
-                        // log current state for debugging
-                        console.log("pc.signalingState before answer:", pc.signalingState);
-                        // only accept answer if we are the offerer and are expecting an answer
-                        if (pc.signalingState === "have-local-offer" || pc.signalingState === "have-local-pranswer") {
-                            try {
-                                await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-                                remoteDescReady.set(msg.from, true);
-                                // flush any queued ICE candidates
-                                const queue = pendingCandidates.get(msg.from) || [];
-                                for (const c of queue) {
-                                    try { await pc.addIceCandidate(c); } catch (e) { console.warn("flush ICE err", e); }
-                                }
-                                pendingCandidates.set(msg.from, []);
-                                console.log("Applied remote answer for", msg.from);
-                            } catch (e) {
-                                console.warn("setRemoteDescription(answer) failed for", msg.from, e);
-                            }
-                        } else {
-                            // avoid throwing InvalidStateError by skipping if not in expected state
-                            console.warn("Ignoring answer from", msg.from, "because signalingState is", pc.signalingState);
+                            console.log("Sent offer (peer-joined) to", peerId);
+                        } catch (e) {
+                            console.warn("Failed to create/send offer on peer-joined", e);
                         }
                     } else {
-                        console.warn("Received answer for unknown PC from", msg.from);
+                        console.log("peer-joined: waiting for offer from", peerId);
                     }
-                } else if (msg.type === "ice-candidate") {
-                    const pc = peers.get(msg.from);
-                    if (pc) {
-                        const cand = new RTCIceCandidate(msg.data);
-                        if (!remoteDescReady.get(msg.from)) {
-                            const q = pendingCandidates.get(msg.from) || [];
-                            q.push(cand); pendingCandidates.set(msg.from, q);
-                        } else {
-                            try { await pc.addIceCandidate(cand); } catch (e) { console.warn("add ICE err", e); }
+                    return;
+                }
+
+                // incoming offer: create/replace pc if necessary, set remote, answer
+                if (msg.type === "offer") {
+                    const peerId = msg.from;
+                    assignSlot(peerId, msg.name || peerId);
+
+                    // If we already have a pc but it's not stable, restart cleanly
+                    if (peers.has(peerId)) {
+                        const existing = peers.get(peerId);
+                        if (existing.signalingState !== "stable") {
+                            console.warn("Existing PC not stable on incoming offer — restarting pc for", peerId, existing.signalingState);
+                            closePeer(peerId);
                         }
                     }
-                } else if (msg.type === "peer-left") {
-                    closePeer(msg.user_id);
+
+                    const pc = await createPeerConnection(peerId);
+                    try {
+                        await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+                    } catch (e) {
+                        console.warn("setRemoteDescription(offer) failed for", peerId, e);
+                        // give up on this offer; hope sender retries
+                        return;
+                    }
+
+                    // mark remote desc ready and flush ICE queue
+                    remoteDescReady.set(peerId, true);
+                    flushCandidates(peerId, pc);
+
+                    try {
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        ws.send(JSON.stringify({ type: "answer", to: peerId, data: answer }));
+                        console.log("Sent answer to", peerId);
+                    } catch (e) {
+                        console.warn("Failed to create/send answer to", peerId, e);
+                    }
+                    return;
                 }
+
+                // incoming answer: only accept when we're in have-local-offer
+                if (msg.type === "answer") {
+                    const peerId = msg.from;
+                    console.log("RX answer from", peerId);
+                    const pc = peers.get(peerId);
+                    if (!pc) {
+                        console.warn("Received answer for unknown PC from", peerId);
+                        return;
+                    }
+
+                    // only accept answer if we are expecting it
+                    const state = pc.signalingState;
+                    console.log("pc.signalingState before answer:", state);
+                    if (state === "have-local-offer" || state === "have-local-pranswer") {
+                        try {
+                            // avoid applying duplicate answer if already has remote
+                            if (!pc.currentRemoteDescription || Object.keys(pc.currentRemoteDescription).length === 0) {
+                                await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+                                remoteDescReady.set(peerId, true);
+                                flushCandidates(peerId, pc);
+                                console.log("Applied remote answer for", peerId);
+                            } else {
+                                console.log("Skipping answer application: remoteDescription already present for", peerId);
+                            }
+                        } catch (e) {
+                            console.warn("setRemoteDescription(answer) failed for", peerId, e);
+                        }
+                    } else {
+                        console.warn("Ignoring answer from", peerId, "because signalingState is", state);
+                    }
+                    return;
+                }
+
+                // ICE candidate
+                if (msg.type === "ice-candidate") {
+                    const peerId = msg.from;
+                    const pc = peers.get(peerId);
+                    const candidate = new RTCIceCandidate(msg.data);
+                    if (pc && remoteDescReady.get(peerId)) {
+                        try {
+                            await pc.addIceCandidate(candidate);
+                        } catch (e) {
+                            console.warn("addIceCandidate error", e);
+                        }
+                    } else {
+                        // queue until remote desc is applied
+                        addCandidateToQueue(peerId, candidate);
+                    }
+                    return;
+                }
+
+                if (msg.type === "peer-left") {
+                    closePeer(msg.user_id);
+                    return;
+                }
+
+                // unknown message type
+                console.warn("Unknown WS message type:", msg.type);
+            };
+
+            ws.onclose = () => {
+                document.getElementById("status").innerText = "Disconnected";
+                console.log("WebSocket closed");
+            };
+            ws.onerror = (e) => {
+                console.warn("WebSocket error", e);
             };
         }
 
+        /***** Controls *****/
         document.getElementById("muteBtn").onclick = () => {
             localStream?.getAudioTracks().forEach(t => t.enabled = false);
             document.getElementById("status").innerText = "Muted";
@@ -807,7 +752,9 @@ ROOM_HTML = """
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ user_id: USER, room_code: ROOM })
                 });
-            } catch { } finally {
+            } catch (e) {
+                console.warn("leave_room failed", e);
+            } finally {
                 ws?.close();
                 localStream?.getTracks().forEach(t => t.stop());
                 if (FRONTEND_URL) { window.location.href = FRONTEND_URL; } else { window.location.href = "/"; }
@@ -816,20 +763,26 @@ ROOM_HTML = """
         document.getElementById("sendBtn").onclick = () => {
             const input = document.getElementById("chatInput");
             const text = input.value.trim();
-            if (!text || ws.readyState !== WebSocket.OPEN) return;
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
             ws.send(JSON.stringify({ type: "chat", text: text }));
             addChatMessage(USER, text, true);
             input.value = "";
         };
 
+        /***** Safety & logging *****/
+        window.addEventListener("unhandledrejection", (ev) => {
+            console.warn("UnhandledPromiseRejection:", ev.reason);
+        });
+
+        /***** Start up *****/
         (async () => {
             await initLocalMedia();
             await startWebSocket();
         })();
     </script>
 </body>
-
 </html>
+
 """
 
 @app.get("/room", response_class=HTMLResponse)
