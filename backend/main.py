@@ -1,3 +1,4 @@
+import json
 import sys
 import os
 import time
@@ -10,10 +11,11 @@ import base64
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from typing import Dict, Optional, Tuple
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse, HTMLResponse
+from fastapi.websockets import WebSocketState
 from pydantic import BaseModel
 from authlib.integrations.starlette_client import OAuth
 from urllib.parse import quote
@@ -68,6 +70,20 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
 
+
+VOSK_SAMPLE_RATE = 16000
+VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "./models/vosk-model-small-en-us-0.15")
+vosk_model = None
+
+try:
+    from vosk import Model, KaldiRecognizer
+    if os.path.isdir(VOSK_MODEL_PATH):
+        vosk_model = Model(VOSK_MODEL_PATH)
+    else:
+        logging.warning(f"Vosk model not found at {VOSK_MODEL_PATH}")
+except Exception as e:
+    logging.warning(f"Vosk not available: {e}")
+    vosk_model = None
 
 def generate_room_code(length: int = 6) -> str:
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
@@ -998,3 +1014,137 @@ async def room_page(room_code: str, user_id: str):
 def json_dumps(x: str) -> str:
     import json as _json
     return _json.dumps(x)
+
+
+@app.websocket("/ws/translate")
+async def ws_translate(ws: WebSocket):
+    await ws.accept()
+    speaker_id = None
+    from_lang = "auto"
+    target_lang = "en"
+    voice = "default"
+    recognizer = None
+    last_partial_emit = 0.0
+
+    try:
+        while True:
+            msg = await ws.receive()
+
+            if "text" in msg:
+                try:
+                    payload = json.loads(msg["text"])
+                except Exception:
+                    continue
+                mtype = payload.get("type")
+
+                if mtype == "start":
+                    speaker_id = payload.get("speakerId")
+                    from_lang = payload.get("fromLang", "auto")
+                    target_lang = payload.get("targetLang", "en")
+                    voice = payload.get("voice", voice)
+
+                    if vosk_model is not None:
+                        recognizer = KaldiRecognizer(vosk_model, 16000)
+                        recognizer.SetWords(True)
+
+                    await ws.send_text(json.dumps({
+                        "type": "status",
+                        "msg": "started",
+                        "speakerId": speaker_id,
+                        "fromLang": from_lang,
+                        "targetLang": target_lang,
+                    }))
+
+                elif mtype == "stop":
+                    if recognizer is not None:
+                        try:
+                            final_json = json.loads(recognizer.FinalResult())
+                            final_text = (final_json or {}).get("text", "").strip()
+                            if final_text:
+                                await ws.send_text(json.dumps({
+                                    "type": "finalText",
+                                    "speakerId": speaker_id,
+                                    "fromLang": from_lang,
+                                    "targetLang": target_lang,
+                                    "text": final_text
+                                }))
+                                await _translate_and_tts(ws, final_text, target_lang, voice, speaker_id, from_lang)
+                        except Exception:
+                            pass
+                    await ws.send_text(json.dumps({
+                        "type": "status",
+                        "msg": "stopped",
+                        "speakerId": speaker_id
+                    }))
+                continue
+
+            # --- audio frames ---
+            if "bytes" in msg:
+                frame = msg["bytes"]
+                if recognizer is None:
+                    continue
+
+                accepted = recognizer.AcceptWaveform(frame)
+                now = time.time()
+
+                if accepted:
+                    try:
+                        res = json.loads(recognizer.Result() or "{}")
+                        text_ = (res.get("text") or "").strip()
+                    except Exception:
+                        text_ = ""
+                    if text_:
+                        await ws.send_text(json.dumps({
+                            "type": "finalText",
+                            "speakerId": speaker_id,
+                            "fromLang": from_lang,
+                            "targetLang": target_lang,
+                            "text": text_
+                        }))
+                        await _translate_and_tts(ws, text_, target_lang, voice, speaker_id, from_lang)
+
+                else:
+                    if now - last_partial_emit > 0.2:
+                        try:
+                            pres = json.loads(recognizer.PartialResult() or "{}")
+                            ptext = (pres.get("partial") or "").strip()
+                        except Exception:
+                            ptext = ""
+                        if ptext:
+                            await ws.send_text(json.dumps({
+                                "type": "partialText",
+                                "speakerId": speaker_id,
+                                "fromLang": from_lang,
+                                "targetLang": target_lang,
+                                "text": ptext
+                            }))
+                        last_partial_emit = now
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logging.exception(f"/ws/translate error: {e}")
+    finally:
+        if ws.application_state != WebSocketState.DISCONNECTED:
+            await ws.close()
+
+
+async def _translate_and_tts(ws: WebSocket, text: str, target_lang: str,
+                             voice: str, speaker_id: str, from_lang: str):
+    try:
+        translated = await asyncio.to_thread(translate_text, text, target_lang)
+    except Exception:
+        translated = text
+
+    try:
+        audio_bytes = await synthesize_with_cache(translated, target_lang, voice=voice)
+        await ws.send_text(json.dumps({
+            "type": "audio",
+            "speakerId": speaker_id,
+            "fromLang": from_lang,
+            "targetLang": target_lang,
+            "mime": "audio/mpeg",
+            "b64": base64.b64encode(audio_bytes).decode("utf-8")
+        }))
+    except Exception as e:
+        logging.warning(f"TTS failed: {e}")
