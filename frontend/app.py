@@ -3,6 +3,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import streamlit as st
 import requests
 from streamlit.components.v1 import html as st_html
+from urllib.parse import quote
 
 BACKEND_URL = "https://murf-coding-challenge-4-multilingual.onrender.com" 
 
@@ -210,7 +211,7 @@ class AudioCallApp:
         """, unsafe_allow_html=True)
 
         ws_base = ws_url_from_backend(self.backend_url)
-        ws_url = f"{ws_base}/ws?room_code={room}&user_id={user}"
+        ws_url = f"{ws_base}/ws?room_code={quote(room)}&user_id={quote(user)}"
 
         with open(os.path.join("frontend", "index.html")) as f:
             html_code = f.read()

@@ -11,6 +11,7 @@ from typing import Dict, Optional, Tuple
 from dotenv import load_dotenv
 from backend.speech_to_text_and_translation_utils import speech_to_text, translate_text
 from backend.murf_api import generate_speech_from_text
+from urllib.parse import unquote
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -196,8 +197,8 @@ ws_manager = WSRoomManager()
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
-    room_code = websocket.query_params.get("room_code")
-    user_id = websocket.query_params.get("user_id")
+    room_code = unquote(websocket.query_params.get("room_code", ""))
+    user_id = unquote(websocket.query_params.get("user_id", ""))
 
     if not room_code or not user_id:
         await websocket.close()
