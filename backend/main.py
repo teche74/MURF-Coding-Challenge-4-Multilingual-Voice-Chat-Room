@@ -2,6 +2,7 @@ import sys, os, time, random, string, logging, asyncio, base64
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from typing import Dict, Optional, Tuple
+import json
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -187,6 +188,8 @@ async def transcribe_audio(file: UploadFile = File(...), target_lang: str = "en"
 class WSRoomManager:
     def __init__(self):
         self.rooms_ws: Dict[str, Dict[str, WebSocket]] = {}
+        self._recent_signals: Dict[Tuple, float] = {}
+        self._dedupe_ttl = 2.0 
 
     async def connect(self, room_code: str, user_id: str, ws: WebSocket):
         await ws.accept()
@@ -207,10 +210,42 @@ class WSRoomManager:
     async def send_json(self, ws: WebSocket, payload: dict):
         await ws.send_json(payload)
 
-    async def relay(self, room_code: str, target_user: str, payload: dict):
+    async def relay(self, room_code: str, from_user: str, target_user: str, payload: dict):
+        """
+        Relay a signaling payload to a specific target_user.
+        - Do not send to self.
+        - Dedupe identical payloads for a short window to avoid duplicates being re-applied.
+        """
+        if from_user == target_user:
+            logger.warning(f"Skipping relay: sender==target ({from_user})")
+            return
+
         target_ws = self.rooms_ws.get(room_code, {}).get(target_user)
-        if target_ws:
+        if not target_ws:
+            logger.warning(f"Relay target not connected: {target_user} in {room_code}")
+            return
+
+        try:
+            data_serialized = json.dumps(payload.get("data", ""), sort_keys=True)
+        except Exception:
+            data_serialized = str(payload.get("data", ""))
+
+        key = (room_code, from_user, target_user, payload.get("type"), data_serialized)
+        now = time.time()
+        last_ts = self._recent_signals.get(key)
+        if last_ts and (now - last_ts) < self._dedupe_ttl:
+            logger.info("Dropping duplicate signaling msg (within TTL) %s -> %s type=%s", from_user, target_user, payload.get("type"))
+            return
+
+        self._recent_signals[key] = now
+        for k, ts in list(self._recent_signals.items()):
+            if now - ts > self._dedupe_ttl:
+                self._recent_signals.pop(k, None)
+
+        try:
             await target_ws.send_json(payload)
+        except Exception as e:
+            logger.warning("Failed to relay to %s: %s", target_user, e)
 
 ws_manager = WSRoomManager()
 
@@ -252,12 +287,12 @@ async def ws_endpoint(websocket: WebSocket):
             data = msg.get("data", {})
 
             if mtype in ("offer", "answer", "ice-candidate") and to_user:
-                await ws_manager.relay(room_code, to_user, {
-                    "type": mtype,
-                    "from": user_id,
-                    "name": get_user_name(user_id),
-                    "data": data
-                })
+                await ws_manager.relay(room_code, user_id, to_user, {
+                "type": mtype,
+                "from": user_id,
+                "name": get_user_name(user_id),
+                "data": data
+            })
             elif mtype == "chat":
                 text = msg.get("text", "")
                 broadcast_payload = {"type": "chat", "from": user_id, "name": get_user_name(user_id), "text": text}
@@ -288,292 +323,513 @@ async def ws_endpoint(websocket: WebSocket):
                 pass
 
 # --- NEW: serve the room UI outside Streamlit (full mic permission) ---
-ROOM_HTML = """<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Voice Room</title>
-<style>
-body { margin:0; font-family:'Segoe UI', sans-serif; background: linear-gradient(135deg,#0f2027,#203a43,#2c5364); color:#eee; display:flex; height:100vh; }
-.app-container { display:flex; width:100%; }
-.sidebar { width:250px; background:rgba(0,0,0,0.5); border-right:1px solid rgba(255,255,255,0.1); padding:20px; backdrop-filter: blur(10px); display:flex; flex-direction:column; gap:16px; }
-.room-title { font-size:18px; color:#0ff; margin-bottom:6px; }
-.participants-list { list-style:none; padding:0; margin:0; }
-.participants-list li { padding:8px; margin:4px 0; background: rgba(255,255,255,0.05); border-radius:8px; font-size:14px; display:flex; justify-content:space-between; align-items:center; }
-.me-badge { background:#0ff; color:#000; font-size:11px; border-radius:6px; padding:2px 6px; margin-left:8px; }
-.main-content { flex:1; display:flex; flex-direction:column; padding:20px; }
-.status-bar { text-align:center; margin-bottom:15px; font-size:14px; color:#0ff; }
-.user-grid { display:grid; grid-template-columns:repeat(2,1fr); grid-template-rows:repeat(2,1fr); gap:20px; margin-bottom:20px; }
-.user-card { width:150px; height:180px; border-radius:20px; background:rgba(255,255,255,0.05); backdrop-filter:blur(8px); box-shadow:0 5px 15px rgba(0,0,0,0.3); display:flex; flex-direction:column; align-items:center; justify-content:center; transition:all 0.3s ease; border:1px solid rgba(255,255,255,0.1); }
-.user-card .avatar { width:80px; height:80px; border-radius:50%; background:rgba(255,255,255,0.2); margin-bottom:10px; display:flex; align-items:center; justify-content:center; font-size:36px; }
-.user-card .username { color:#fcfcfc; font-weight:600; text-align:center; }
-.user-card.speaking .avatar { box-shadow:0 0 20px #00f2fe, 0 0 40px #4facfe; transform:scale(1.1); }
-.user-card.empty .avatar { background:rgba(255,255,255,0.05); }
-.controls { display:flex; justify-content:center; gap:20px; margin-bottom:15px; }
-.control-btn { padding:12px 18px; font-size:16px; border:none; border-radius:12px; cursor:pointer; background:#333; color:#eee; transition:all 0.2s ease; }
-.control-btn:hover { background:#444; }
-.leave { background:#b00020; color:#fff; }
-.leave:hover { background:#d00030; }
-.control-btn:disabled { opacity:0.6; cursor:not-allowed; }
-.chat-box { flex:1; display:flex; flex-direction:column; background:rgba(0,0,0,0.4); border-radius:12px; overflow:hidden; backdrop-filter: blur(5px); }
-.messages { flex:1; padding:10px; overflow-y:auto; }
-.message { margin:6px 0; padding:8px 12px; background:rgba(255,255,255,0.05); border-radius:8px; max-width:85%; }
-.message.me { background:rgba(0,255,255,0.2); align-self:flex-end; }
-.chat-input { display:flex; border-top:1px solid rgba(255,255,255,0.1); }
-.chat-input input { flex:1; padding:12px; border:none; outline:none; background:rgba(0,0,0,0.5); color:#fff; }
-.chat-input button { padding:0 20px; background:#0ff; border:none; color:#000; cursor:pointer; transition:0.2s; }
-.chat-input button:hover { background:#0cc; }
-</style>
+ROOM_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voice Room</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: #eee;
+            display: flex;
+            height: 100vh;
+        }
+
+        .app-container {
+            display: flex;
+            width: 100%;
+        }
+
+        .sidebar {
+            width: 250px;
+            background: rgba(0, 0, 0, 0.5);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .room-title {
+            font-size: 18px;
+            color: #0ff;
+            margin-bottom: 6px;
+        }
+
+        .participants-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .participants-list li {
+            padding: 8px;
+            margin: 4px 0;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .me-badge {
+            background: #0ff;
+            color: #000;
+            font-size: 11px;
+            border-radius: 6px;
+            padding: 2px 6px;
+            margin-left: 8px;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+        }
+
+        .status-bar {
+            text-align: center;
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: #0ff;
+        }
+
+        .user-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            grid-template-rows: repeat(2, 1fr);
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .user-card {
+            width: 150px;
+            height: 180px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(8px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .user-card .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+        }
+
+        .user-card .username {
+            color: #fcfcfc;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .user-card.speaking .avatar {
+            box-shadow: 0 0 20px #00f2fe, 0 0 40px #4facfe;
+            transform: scale(1.1);
+        }
+
+        .user-card.empty .avatar {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+
+        .control-btn {
+            padding: 12px 18px;
+            font-size: 16px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            background: #333;
+            color: #eee;
+            transition: all 0.2s ease;
+        }
+
+        .control-btn:hover {
+            background: #444;
+        }
+
+        .leave {
+            background: #b00020;
+            color: #fff;
+        }
+
+        .leave:hover {
+            background: #d00030;
+        }
+
+        .control-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .chat-box {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 12px;
+            overflow: hidden;
+            backdrop-filter: blur(5px);
+        }
+
+        .messages {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin: 6px 0;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            max-width: 85%;
+        }
+
+        .message.me {
+            background: rgba(0, 255, 255, 0.2);
+            align-self: flex-end;
+        }
+
+        .chat-input {
+            display: flex;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            outline: none;
+            background: rgba(0, 0, 0, 0.5);
+            color: #fff;
+        }
+
+        .chat-input button {
+            padding: 0 20px;
+            background: #0ff;
+            border: none;
+            color: #000;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .chat-input button:hover {
+            background: #0cc;
+        }
+    </style>
 </head>
+
 <body>
-<div class="app-container">
-  <aside class="sidebar">
-    <div>
-      <h2 class="room-title">Room: <span id="roomName"></span></h2>
-      <ul id="participants" class="participants-list"></ul>
+    <div class="app-container">
+        <aside class="sidebar">
+            <div>
+                <h2 class="room-title">Room: <span id="roomName"></span></h2>
+                <ul id="participants" class="participants-list"></ul>
+            </div>
+            <div class="chat-box">
+                <div id="chat-messages" class="messages"></div>
+                <div class="chat-input">
+                    <input type="text" id="chatInput" placeholder="Type a message..." />
+                    <button id="sendBtn">➤</button>
+                </div>
+            </div>
+        </aside>
+        <main class="main-content">
+            <div id="status" class="status-bar">Connecting...</div>
+            <div class="user-grid">
+                <div class="user-card empty" id="user1">
+                    <div class="avatar">🙂</div>
+                    <div class="username">Empty</div>
+                </div>
+                <div class="user-card empty" id="user2">
+                    <div class="avatar">🙂</div>
+                    <div class="username">Empty</div>
+                </div>
+                <div class="user-card empty" id="user3">
+                    <div class="avatar">🙂</div>
+                    <div class="username">Empty</div>
+                </div>
+                <div class="user-card empty" id="user4">
+                    <div class="avatar">🙂</div>
+                    <div class="username">Empty</div>
+                </div>
+            </div>
+            <div class="controls">
+                <button id="muteBtn" class="control-btn" disabled>🔇 Mute</button>
+                <button id="unmuteBtn" class="control-btn" disabled>🎙️ Unmute</button>
+                <button id="leaveBtn" class="control-btn leave">❌ Leave</button>
+            </div>
+        </main>
     </div>
-    <div class="chat-box">
-      <div id="chat-messages" class="messages"></div>
-      <div class="chat-input">
-        <input type="text" id="chatInput" placeholder="Type a message..." />
-        <button id="sendBtn">➤</button>
-      </div>
-    </div>
-  </aside>
-  <main class="main-content">
-    <div id="status" class="status-bar">Connecting...</div>
-    <div class="user-grid">
-      <div class="user-card empty" id="user1"><div class="avatar">🙂</div><div class="username">Empty</div></div>
-      <div class="user-card empty" id="user2"><div class="avatar">🙂</div><div class="username">Empty</div></div>
-      <div class="user-card empty" id="user3"><div class="avatar">🙂</div><div class="username">Empty</div></div>
-      <div class="user-card empty" id="user4"><div class="avatar">🙂</div><div class="username">Empty</div></div>
-    </div>
-    <div class="controls">
-      <button id="muteBtn" class="control-btn" disabled>🔇 Mute</button>
-      <button id="unmuteBtn" class="control-btn" disabled>🎙️ Unmute</button>
-      <button id="leaveBtn" class="control-btn leave">❌ Leave</button>
-    </div>
-  </main>
-</div>
 
-<script>
-/*** Config from query params + origin ***/
-const qs = new URLSearchParams(location.search);
-const ROOM = qs.get("room_code") || "";
-const USER = qs.get("user_id") || "";
-const BACKEND_HTTP = location.origin;
-const WS_URL = BACKEND_HTTP.replace(/^http/i, "ws") + "/ws?room_code=" + encodeURIComponent(ROOM) + "&user_id=" + encodeURIComponent(USER);
-const FRONTEND_URL = {{FRONTEND_URL_JSON}};
+    <script>
+        /*** Config from query params + origin ***/
+        const qs = new URLSearchParams(location.search);
+        const ROOM = qs.get("room_code") || "";
+        const USER = qs.get("user_id") || "";
+        const BACKEND_HTTP = location.origin;
+        const WS_URL = BACKEND_HTTP.replace(/^http/i, "ws") + "/ws?room_code=" + encodeURIComponent(ROOM) + "&user_id=" + encodeURIComponent(USER);
+        const FRONTEND_URL = {{ FRONTEND_URL_JSON }};
 
-console.log("WS_URL", WS_URL, "HTTP", BACKEND_HTTP, "ROOM", ROOM, "USER", USER);
-document.getElementById('roomName').innerText = ROOM;
+        console.log("WS_URL", WS_URL, "HTTP", BACKEND_HTTP, "ROOM", ROOM, "USER", USER);
+        document.getElementById('roomName').innerText = ROOM;
 
-let localStream = null;
-let ws = null;
-const peers = new Map();
-const userSlots = ["user1","user2","user3","user4"];
-const peerSlotMap = new Map();
-const remoteDescReady = new Map();
-const participants = new Set();
-const pendingCandidates = new Map();
+        let localStream = null;
+        let ws = null;
+        const peers = new Map();
+        const userSlots = ["user1", "user2", "user3", "user4"];
+        const peerSlotMap = new Map();
+        const remoteDescReady = new Map();
+        const participants = new Set();
+        const pendingCandidates = new Map();
 
-function updateParticipantsUI(){
-  const list = document.getElementById("participants");
-  list.innerHTML = "";
-  for (let uid of participants) {
-    const li = document.createElement("li");
-    const you = uid === USER ? '<span class="me-badge">You</span>' : '';
-    li.innerHTML = `<span>${uid}</span>${you}`;
-    list.appendChild(li);
-  }
-}
-function assignSlot(userId, label){
-  if (peerSlotMap.has(userId)) return peerSlotMap.get(userId);
-  for (let slot of userSlots){
-    const el = document.getElementById(slot);
-    if (el.classList.contains("empty")){
-      el.classList.remove("empty");
-      el.querySelector(".username").innerText = label || userId;
-      peerSlotMap.set(userId, slot);
-      participants.add(userId);
-      updateParticipantsUI();
-      return slot;
-    }
-  }
-  return null;
-}
-function removeSlot(userId){
-  const slot = peerSlotMap.get(userId);
-  if (!slot) return;
-  const el = document.getElementById(slot);
-  el.classList.add("empty");
-  el.classList.remove("speaking");
-  el.querySelector(".username").innerText = "Empty";
-  peerSlotMap.delete(userId);
-  participants.delete(userId);
-  updateParticipantsUI();
-}
-function addChatMessage(fromUser, text, isMe=false){
-  const box = document.getElementById("chat-messages");
-  const div = document.createElement("div");
-  div.className = "message" + (isMe ? " me" : "");
-  const name = isMe ? "You" : fromUser;
-  div.innerHTML = `<strong>${name}:</strong> ${text}`;
-  box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
-}
-
-async function initLocalMedia(){
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    document.getElementById("status").innerText = "Mic ready";
-    document.getElementById("muteBtn").disabled = false;
-    document.getElementById("unmuteBtn").disabled = false;
-    assignSlot(USER, `You (${USER})`);
-  } catch(e){
-    document.getElementById("status").innerText = "Mic access denied";
-  }
-}
-
-function closePeer(peerId){
-  const pc = peers.get(peerId);
-  if (pc){ try{ pc.close(); }catch{} peers.delete(peerId); }
-  const a = document.getElementById("audio-"+peerId);
-  if (a) a.remove();
-  removeSlot(peerId);
-}
-
-async function createPeerConnection(peerId){
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-  remoteDescReady.set(peerId, false);
-  pendingCandidates.set(peerId, []);
-  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-  pc.ontrack = (event) => {
-    let audio = document.getElementById("audio-"+peerId);
-    if (!audio){
-      audio = document.createElement("audio");
-      audio.id = "audio-"+peerId; audio.autoplay = true; audio.playsInline = true;
-      document.body.appendChild(audio);
-    }
-    audio.srcObject = event.streams[0];
-  };
-  pc.onicecandidate = (event) => {
-    if (event.candidate){
-      ws?.send(JSON.stringify({ type: "ice-candidate", to: peerId, data: event.candidate }));
-    }
-  };
-  pc.onconnectionstatechange = () => {
-    const st = pc.connectionState;
-    if (st === "failed" || st === "disconnected" || st === "closed"){
-      closePeer(peerId);
-    }
-  };
-  peers.set(peerId, pc);
-  return pc;
-}
-
-async function startWebSocket(){
-  ws = new WebSocket(WS_URL);
-  ws.onopen = () => {
-    document.getElementById("status").innerText = "Connected";
-    assignSlot(USER, `You (${USER})`);
-  };
-  ws.onmessage = async (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === "chat"){
-      addChatMessage(msg.from, msg.text, msg.from === USER);
-    } else if (msg.type === "peers"){
-      await new Promise(r => setTimeout(r, 50));
-      for (const peer of msg.peers){
-        const peerId = peer.user_id;
-        const pc = await createPeerConnection(peerId);
-        assignSlot(peerId, peer.name || peerId);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
-      }
-    } else if (msg.type === "peer-joined"){
-      const peerId = msg.user_id;
-      assignSlot(peerId, msg.name || peerId);
-      (async () => {
-        if (!peers.has(peerId)){
-          const pc = await createPeerConnection(peerId);
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
+        function updateParticipantsUI() {
+            const list = document.getElementById("participants");
+            list.innerHTML = "";
+            for (let uid of participants) {
+                const li = document.createElement("li");
+                const you = uid === USER ? '<span class="me-badge">You</span>' : '';
+                li.innerHTML = `<span>${uid}</span>${you}`;
+                list.appendChild(li);
+            }
         }
-      })();
-    } else if (msg.type === "offer"){
-      const peerId = msg.from;
-      const pc = await createPeerConnection(peerId);
-      await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-      remoteDescReady.set(peerId, true);
-      const queue = pendingCandidates.get(peerId) || [];
-      for (const c of queue){ try{ await pc.addIceCandidate(c);}catch(e){ console.warn("flush ICE err", e); } }
-      pendingCandidates.set(peerId, []);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      ws.send(JSON.stringify({ type: "answer", to: peerId, data: answer }));
-    } else if (msg.type === "answer"){
-      const pc = peers.get(msg.from);
-      if (pc){
-        await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-        remoteDescReady.set(msg.from, true);
-        const queue = pendingCandidates.get(msg.from) || [];
-        for (const c of queue){ try{ await pc.addIceCandidate(c);}catch(e){ console.warn("flush ICE err", e); } }
-        pendingCandidates.set(msg.from, []);
-      }
-    } else if (msg.type === "ice-candidate"){
-      const pc = peers.get(msg.from);
-      if (pc){
-        const cand = new RTCIceCandidate(msg.data);
-        if (!remoteDescReady.get(msg.from)){
-          const q = pendingCandidates.get(msg.from) || [];
-          q.push(cand); pendingCandidates.set(msg.from, q);
-        } else {
-          try{ await pc.addIceCandidate(cand);}catch(e){ console.warn("add ICE err", e); }
+        function assignSlot(userId, label) {
+            if (peerSlotMap.has(userId)) return peerSlotMap.get(userId);
+            for (let slot of userSlots) {
+                const el = document.getElementById(slot);
+                if (el.classList.contains("empty")) {
+                    el.classList.remove("empty");
+                    el.querySelector(".username").innerText = label || userId;
+                    peerSlotMap.set(userId, slot);
+                    participants.add(userId);
+                    updateParticipantsUI();
+                    return slot;
+                }
+            }
+            return null;
         }
-      }
-    } else if (msg.type === "peer-left"){
-      closePeer(msg.user_id);
-    }
-  };
-}
+        function removeSlot(userId) {
+            const slot = peerSlotMap.get(userId);
+            if (!slot) return;
+            const el = document.getElementById(slot);
+            el.classList.add("empty");
+            el.classList.remove("speaking");
+            el.querySelector(".username").innerText = "Empty";
+            peerSlotMap.delete(userId);
+            participants.delete(userId);
+            updateParticipantsUI();
+        }
+        function addChatMessage(fromUser, text, isMe = false) {
+            const box = document.getElementById("chat-messages");
+            const div = document.createElement("div");
+            div.className = "message" + (isMe ? " me" : "");
+            const name = isMe ? "You" : fromUser;
+            div.innerHTML = `<strong>${name}:</strong> ${text}`;
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+        }
 
-document.getElementById("muteBtn").onclick = () => {
-  localStream?.getAudioTracks().forEach(t => t.enabled = false);
-  document.getElementById("status").innerText = "Muted";
-};
-document.getElementById("unmuteBtn").onclick = () => {
-  localStream?.getAudioTracks().forEach(t => t.enabled = true);
-  document.getElementById("status").innerText = "Unmuted";
-};
-document.getElementById("leaveBtn").onclick = async () => {
-  try {
-    await fetch(BACKEND_HTTP + "/leave_room", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: USER, room_code: ROOM })
-    });
-  } catch {} finally {
-    ws?.close();
-    localStream?.getTracks().forEach(t => t.stop());
-    if (FRONTEND_URL) { window.location.href = FRONTEND_URL; } else { window.location.href = "/"; }
-  }
-};
-document.getElementById("sendBtn").onclick = () => {
-  const input = document.getElementById("chatInput");
-  const text = input.value.trim();
-  if (!text || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: "chat", text: text }));
-  addChatMessage(USER, text, true);
-  input.value = "";
-};
+        async function initLocalMedia() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                document.getElementById("status").innerText = "Mic ready";
+                document.getElementById("muteBtn").disabled = false;
+                document.getElementById("unmuteBtn").disabled = false;
+                assignSlot(USER, `You (${USER})`);
+            } catch (e) {
+                document.getElementById("status").innerText = "Mic access denied";
+            }
+        }
 
-(async () => {
-  await initLocalMedia();
-  await startWebSocket();
-})();
-</script>
-</body></html>
+        function closePeer(peerId) {
+            const pc = peers.get(peerId);
+            if (pc) { try { pc.close(); } catch { } peers.delete(peerId); }
+            const a = document.getElementById("audio-" + peerId);
+            if (a) a.remove();
+            removeSlot(peerId);
+        }
+
+        async function createPeerConnection(peerId) {
+            const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+            remoteDescReady.set(peerId, false);
+            pendingCandidates.set(peerId, []);
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            pc.ontrack = (event) => {
+                let audio = document.getElementById("audio-" + peerId);
+                if (!audio) {
+                    audio = document.createElement("audio");
+                    audio.id = "audio-" + peerId; audio.autoplay = true; audio.playsInline = true;
+                    document.body.appendChild(audio);
+                }
+                audio.srcObject = event.streams[0];
+            };
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws?.send(JSON.stringify({ type: "ice-candidate", to: peerId, data: event.candidate }));
+                }
+            };
+            pc.onconnectionstatechange = () => {
+                const st = pc.connectionState;
+                if (st === "failed" || st === "disconnected" || st === "closed") {
+                    closePeer(peerId);
+                }
+            };
+            peers.set(peerId, pc);
+            return pc;
+        }
+
+        async function startWebSocket() {
+            ws = new WebSocket(WS_URL);
+            ws.onopen = () => {
+                document.getElementById("status").innerText = "Connected";
+                assignSlot(USER, `You (${USER})`);
+            };
+            ws.onmessage = async (ev) => {
+                const msg = JSON.parse(ev.data);
+                if (msg.type === "chat") {
+                    addChatMessage(msg.from, msg.text, msg.from === USER);
+                } else if (msg.type === "peers") {
+                    await new Promise(r => setTimeout(r, 50));
+                    for (const peer of msg.peers) {
+                        const peerId = peer.user_id;
+                        const pc = await createPeerConnection(peerId);
+                        assignSlot(peerId, peer.name || peerId);
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
+                    }
+                } else if (msg.type === "peer-joined") {
+                    const peerId = msg.user_id;
+                    assignSlot(peerId, msg.name || peerId);
+                    (async () => {
+                        if (!peers.has(peerId)) {
+                            const pc = await createPeerConnection(peerId);
+                            const offer = await pc.createOffer();
+                            await pc.setLocalDescription(offer);
+                            ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
+                        }
+                    })();
+                } else if (msg.type === "offer") {
+                    const peerId = msg.from;
+                    const pc = await createPeerConnection(peerId);
+                    await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+                    remoteDescReady.set(peerId, true);
+                    const queue = pendingCandidates.get(peerId) || [];
+                    for (const c of queue) { try { await pc.addIceCandidate(c); } catch (e) { console.warn("flush ICE err", e); } }
+                    pendingCandidates.set(peerId, []);
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    ws.send(JSON.stringify({ type: "answer", to: peerId, data: answer }));
+                } else if (msg.type === "answer") {
+                    console.log("RX answer from", msg.from);
+                    const pc = peers.get(msg.from);
+                    if (pc) {
+                        // log current state for debugging
+                        console.log("pc.signalingState before answer:", pc.signalingState);
+                        // only accept answer if we are the offerer and are expecting an answer
+                        if (pc.signalingState === "have-local-offer" || pc.signalingState === "have-local-pranswer") {
+                            try {
+                                await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+                                remoteDescReady.set(msg.from, true);
+                                // flush any queued ICE candidates
+                                const queue = pendingCandidates.get(msg.from) || [];
+                                for (const c of queue) {
+                                    try { await pc.addIceCandidate(c); } catch (e) { console.warn("flush ICE err", e); }
+                                }
+                                pendingCandidates.set(msg.from, []);
+                                console.log("Applied remote answer for", msg.from);
+                            } catch (e) {
+                                console.warn("setRemoteDescription(answer) failed for", msg.from, e);
+                            }
+                        } else {
+                            // avoid throwing InvalidStateError by skipping if not in expected state
+                            console.warn("Ignoring answer from", msg.from, "because signalingState is", pc.signalingState);
+                        }
+                    } else {
+                        console.warn("Received answer for unknown PC from", msg.from);
+                    }
+                } else if (msg.type === "ice-candidate") {
+                    const pc = peers.get(msg.from);
+                    if (pc) {
+                        const cand = new RTCIceCandidate(msg.data);
+                        if (!remoteDescReady.get(msg.from)) {
+                            const q = pendingCandidates.get(msg.from) || [];
+                            q.push(cand); pendingCandidates.set(msg.from, q);
+                        } else {
+                            try { await pc.addIceCandidate(cand); } catch (e) { console.warn("add ICE err", e); }
+                        }
+                    }
+                } else if (msg.type === "peer-left") {
+                    closePeer(msg.user_id);
+                }
+            };
+        }
+
+        document.getElementById("muteBtn").onclick = () => {
+            localStream?.getAudioTracks().forEach(t => t.enabled = false);
+            document.getElementById("status").innerText = "Muted";
+        };
+        document.getElementById("unmuteBtn").onclick = () => {
+            localStream?.getAudioTracks().forEach(t => t.enabled = true);
+            document.getElementById("status").innerText = "Unmuted";
+        };
+        document.getElementById("leaveBtn").onclick = async () => {
+            try {
+                await fetch(BACKEND_HTTP + "/leave_room", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ user_id: USER, room_code: ROOM })
+                });
+            } catch { } finally {
+                ws?.close();
+                localStream?.getTracks().forEach(t => t.stop());
+                if (FRONTEND_URL) { window.location.href = FRONTEND_URL; } else { window.location.href = "/"; }
+            }
+        };
+        document.getElementById("sendBtn").onclick = () => {
+            const input = document.getElementById("chatInput");
+            const text = input.value.trim();
+            if (!text || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: "chat", text: text }));
+            addChatMessage(USER, text, true);
+            input.value = "";
+        };
+
+        (async () => {
+            await initLocalMedia();
+            await startWebSocket();
+        })();
+    </script>
+</body>
+
+</html>
 """
 
 @app.get("/room", response_class=HTMLResponse)

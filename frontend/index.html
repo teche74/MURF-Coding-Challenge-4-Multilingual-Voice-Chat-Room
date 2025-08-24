@@ -228,7 +228,6 @@
                 <h2 class="room-title">Room: <span id="roomName"></span></h2>
                 <ul id="participants" class="participants-list"></ul>
             </div>
-
             <div class="chat-box">
                 <div id="chat-messages" class="messages"></div>
                 <div class="chat-input">
@@ -237,10 +236,8 @@
                 </div>
             </div>
         </aside>
-
         <main class="main-content">
             <div id="status" class="status-bar">Connecting...</div>
-
             <div class="user-grid">
                 <div class="user-card empty" id="user1">
                     <div class="avatar">🙂</div>
@@ -259,7 +256,6 @@
                     <div class="username">Empty</div>
                 </div>
             </div>
-
             <div class="controls">
                 <button id="muteBtn" class="control-btn" disabled>🔇 Mute</button>
                 <button id="unmuteBtn" class="control-btn" disabled>🎙️ Unmute</button>
@@ -269,56 +265,53 @@
     </div>
 
     <script>
-            window.APP_CONFIG = {
-                    WS_URL: {{ WS_URL }},
-                    BACKEND_HTTP: {{ BACKEND_HTTP }},
-                    ROOM: {{ ROOM }},
-                    USER: {{ USER }}
-            };
+        /*** Config from query params + origin ***/
+        const qs = new URLSearchParams(location.search);
+        const ROOM = qs.get("room_code") || "";
+        const USER = qs.get("user_id") || "";
+        const BACKEND_HTTP = location.origin;
+        const WS_URL = BACKEND_HTTP.replace(/^http/i, "ws") + "/ws?room_code=" + encodeURIComponent(ROOM) + "&user_id=" + encodeURIComponent(USER);
+        const FRONTEND_URL = {{ FRONTEND_URL_JSON }};
 
-            const {WS_URL, BACKEND_HTTP, ROOM, USER} = window.APP_CONFIG;
-            console.log(WS_URL , BACKEND_HTTP , ROOM , USER);
+        console.log("WS_URL", WS_URL, "HTTP", BACKEND_HTTP, "ROOM", ROOM, "USER", USER);
+        document.getElementById('roomName').innerText = ROOM;
 
-            document.getElementById('roomName').innerText = ROOM;
+        let localStream = null;
+        let ws = null;
+        const peers = new Map();
+        const userSlots = ["user1", "user2", "user3", "user4"];
+        const peerSlotMap = new Map();
+        const remoteDescReady = new Map();
+        const participants = new Set();
+        const pendingCandidates = new Map();
 
-            let localStream = null;
-            let ws = null;
-    const peers = new Map();              // peerId -> RTCPeerConnection
-            const userSlots = ["user1", "user2", "user3", "user4"];
-            const peerSlotMap = new Map();
-            const remoteDescReady = new Map();
-            const participants = new Set();
-            const pendingCandidates = new Map();
-
-            function updateParticipantsUI() {
-        const list = document.getElementById("participants");
+        function updateParticipantsUI() {
+            const list = document.getElementById("participants");
             list.innerHTML = "";
             for (let uid of participants) {
-            const li = document.createElement("li");
-            const you = uid === USER ? '<span class="me-badge">You</span>' : '';
-            li.innerHTML = `<span>${uid}</span>${you}`;
-            list.appendChild(li);
-        }
-    }
-
-            function assignSlot(userId, label) {
-        if (peerSlotMap.has(userId)) return peerSlotMap.get(userId);
-            for (let slot of userSlots) {
-            const el = document.getElementById(slot);
-            if (el.classList.contains("empty")) {
-                el.classList.remove("empty");
-            el.querySelector(".username").innerText = label || userId;
-            peerSlotMap.set(userId, slot);
-            participants.add(userId);
-            updateParticipantsUI();
-            return slot;
+                const li = document.createElement("li");
+                const you = uid === USER ? '<span class="me-badge">You</span>' : '';
+                li.innerHTML = `<span>${uid}</span>${you}`;
+                list.appendChild(li);
             }
         }
+        function assignSlot(userId, label) {
+            if (peerSlotMap.has(userId)) return peerSlotMap.get(userId);
+            for (let slot of userSlots) {
+                const el = document.getElementById(slot);
+                if (el.classList.contains("empty")) {
+                    el.classList.remove("empty");
+                    el.querySelector(".username").innerText = label || userId;
+                    peerSlotMap.set(userId, slot);
+                    participants.add(userId);
+                    updateParticipantsUI();
+                    return slot;
+                }
+            }
             return null;
-    }
-
-            function removeSlot(userId) {
-        const slot = peerSlotMap.get(userId);
+        }
+        function removeSlot(userId) {
+            const slot = peerSlotMap.get(userId);
             if (!slot) return;
             const el = document.getElementById(slot);
             el.classList.add("empty");
@@ -327,291 +320,187 @@
             peerSlotMap.delete(userId);
             participants.delete(userId);
             updateParticipantsUI();
-    }
-
-            function addChatMessage(fromUser, text, isMe = false) {
-        const box = document.getElementById("chat-messages");
+        }
+        function addChatMessage(fromUser, text, isMe = false) {
+            const box = document.getElementById("chat-messages");
             const div = document.createElement("div");
             div.className = "message" + (isMe ? " me" : "");
             const name = isMe ? "You" : fromUser;
             div.innerHTML = `<strong>${name}:</strong> ${text}`;
             box.appendChild(div);
             box.scrollTop = box.scrollHeight;
-    }
+        }
 
-            async function initLocalMedia() {
-        try {
+        async function initLocalMedia() {
+            try {
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            document.getElementById("status").innerText = "Mic ready";
-            document.getElementById("muteBtn").disabled = false;
-            document.getElementById("unmuteBtn").disabled = false;
-
-            assignSlot(USER, `You (${USER})`);
-        } catch (e) {
+                document.getElementById("status").innerText = "Mic ready";
+                document.getElementById("muteBtn").disabled = false;
+                document.getElementById("unmuteBtn").disabled = false;
+                assignSlot(USER, `You (${USER})`);
+            } catch (e) {
                 document.getElementById("status").innerText = "Mic access denied";
-            console.warn("getUserMedia failed", e);
+            }
         }
-    }
 
-            function closePeer(peerId) {
-        const pc = peers.get(peerId);
-            if (pc) {
-            try {pc.close(); } catch (e) {console.warn(e); }
-            peers.delete(peerId);
-        }
+        function closePeer(peerId) {
+            const pc = peers.get(peerId);
+            if (pc) { try { pc.close(); } catch { } peers.delete(peerId); }
             const a = document.getElementById("audio-" + peerId);
             if (a) a.remove();
             removeSlot(peerId);
-            pendingCandidates.delete(peerId);
-            remoteDescReady.delete(peerId);
-    }
+        }
 
-            async function createPeerConnection(peerId) {
-        // if already exists return it
-        if (peers.has(peerId)) return peers.get(peerId);
-
-            const pc = new RTCPeerConnection({
-                iceServers: [{urls: "stun:stun.l.google.com:19302" }]
-        });
-
+        async function createPeerConnection(peerId) {
+            const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
             remoteDescReady.set(peerId, false);
             pendingCandidates.set(peerId, []);
-
-        // add local tracks
-        if (localStream) localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
-        pc.ontrack = (event) => {
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            pc.ontrack = (event) => {
                 let audio = document.getElementById("audio-" + peerId);
-            if (!audio) {
-                audio = document.createElement("audio");
-            audio.id = "audio-" + peerId;
-            audio.autoplay = true;
-            audio.playsInline = true;
-            document.body.appendChild(audio);
-            }
-            audio.srcObject = event.streams[0];
-        };
-
-        pc.onicecandidate = (event) => {
-            if (event.candidate) {
-                ws?.send(JSON.stringify({
-                    type: "ice-candidate",
-                    to: peerId,
-                    data: event.candidate
-                }));
-            }
-        };
-
-        pc.onconnectionstatechange = () => {
-            const st = pc.connectionState;
-            if (st === "failed" || st === "disconnected" || st === "closed") {
-                closePeer(peerId);
-            }
-        };
-
+                if (!audio) {
+                    audio = document.createElement("audio");
+                    audio.id = "audio-" + peerId; audio.autoplay = true; audio.playsInline = true;
+                    document.body.appendChild(audio);
+                }
+                audio.srcObject = event.streams[0];
+            };
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws?.send(JSON.stringify({ type: "ice-candidate", to: peerId, data: event.candidate }));
+                }
+            };
+            pc.onconnectionstatechange = () => {
+                const st = pc.connectionState;
+                if (st === "failed" || st === "disconnected" || st === "closed") {
+                    closePeer(peerId);
+                }
+            };
             peers.set(peerId, pc);
             return pc;
-    }
-
-            function shouldInitiateWith(peerId) {
-        // deterministic tie-breaker: lexicographic comparison
-        // only one side will create the initial offer -> avoids glare
-        try {
-            return String(USER) < String(peerId);
-        } catch (e) {
-            return true;
         }
-    }
 
-            async function startWebSocket() {
-                ws = new WebSocket(WS_URL);
-
-        ws.onopen = () => {
+        async function startWebSocket() {
+            ws = new WebSocket(WS_URL);
+            ws.onopen = () => {
                 document.getElementById("status").innerText = "Connected";
-            assignSlot(USER, `You (${USER})`);
-            console.log("WS open");
-        };
-
-        ws.onmessage = async (ev) => {
-            const msg = JSON.parse(ev.data);
-
-            if (msg.type === "chat") {
-                addChatMessage(msg.from, msg.text, msg.from === USER);
-
-            } else if (msg.type === "peers") {
-                // initial list of peers already in room
-                await new Promise(r => setTimeout(r, 50)); // tiny stagger
-            for (const peer of msg.peers) {
-                    const peerId = peer.user_id;
-            assignSlot(peerId, peer.name || peerId);
-
-            // create pc always (so it exists for incoming offers), but only *initiate* (createOffer) if tie-breaker says so
-            const pc = await createPeerConnection(peerId);
-
-            if (shouldInitiateWith(peerId)) {
-                        try {
-                            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            ws.send(JSON.stringify({type: "offer", to: peerId, data: offer }));
-                        } catch (e) {
-                console.warn("offer send failed", e);
-                        }
-                    } else {
-                // wait for the other side to initiate
-                console.log("waiting for peer to offer:", peerId);
-                    }
-                }
-
-            } else if (msg.type === "peer-joined") {
-                // a new peer has joined — decide who offers
-                const peerId = msg.user_id;
-            assignSlot(peerId, msg.name || peerId);
-            const pc = await createPeerConnection(peerId);
-
-            if (shouldInitiateWith(peerId)) {
-                    // we will initiate
-                    try {
+                assignSlot(USER, `You (${USER})`);
+            };
+            ws.onmessage = async (ev) => {
+                const msg = JSON.parse(ev.data);
+                if (msg.type === "chat") {
+                    addChatMessage(msg.from, msg.text, msg.from === USER);
+                } else if (msg.type === "peers") {
+                    await new Promise(r => setTimeout(r, 50));
+                    for (const peer of msg.peers) {
+                        const peerId = peer.user_id;
+                        const pc = await createPeerConnection(peerId);
+                        assignSlot(peerId, peer.name || peerId);
                         const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            ws.send(JSON.stringify({type: "offer", to: peerId, data: offer }));
-                    } catch (e) {
-                console.warn("peer-joined offer failed", e);
+                        await pc.setLocalDescription(offer);
+                        ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
                     }
-                } else {
-                console.log("peer-joined: waiting for offer from", peerId);
-                }
-
-            } else if (msg.type === "offer") {
-                const peerId = msg.from;
-            // if we already had a non-stable connection with them, restart to avoid rollback complexity
-            if (peers.has(peerId)) {
-                    const existing = peers.get(peerId);
-            if (existing.signalingState !== "stable") {
-                console.warn("existing pc not stable on incoming offer — restarting pc for", peerId, existing.signalingState);
-            closePeer(peerId);
-                    }
-                }
-
-            // ensure pc exists, then accept the offer
-            const pc = await createPeerConnection(peerId);
-            try {
-                await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-                } catch (e) {
-                console.warn("setRemoteDescription(offer) failed for", peerId, "state:", pc.signalingState, e);
-            // If setting remote desc fails, give up for this offer (peer will retry)
-            return;
-                }
-
-            // flush queued ICE
-            remoteDescReady.set(peerId, true);
-            const queue = pendingCandidates.get(peerId) || [];
-            for (const c of queue) {
-                    try {await pc.addIceCandidate(c); } catch (e) {console.warn("flush ICE err", e); }
-                }
-            pendingCandidates.set(peerId, []);
-
-            // create & send answer
-            try {
+                } else if (msg.type === "peer-joined") {
+                    const peerId = msg.user_id;
+                    assignSlot(peerId, msg.name || peerId);
+                    (async () => {
+                        if (!peers.has(peerId)) {
+                            const pc = await createPeerConnection(peerId);
+                            const offer = await pc.createOffer();
+                            await pc.setLocalDescription(offer);
+                            ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
+                        }
+                    })();
+                } else if (msg.type === "offer") {
+                    const peerId = msg.from;
+                    const pc = await createPeerConnection(peerId);
+                    await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+                    remoteDescReady.set(peerId, true);
+                    const queue = pendingCandidates.get(peerId) || [];
+                    for (const c of queue) { try { await pc.addIceCandidate(c); } catch (e) { console.warn("flush ICE err", e); } }
+                    pendingCandidates.set(peerId, []);
                     const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            ws.send(JSON.stringify({type: "answer", to: peerId, data: answer }));
-                } catch (e) {
-                console.warn("failed to create/send answer to", peerId, e);
-                }
-
-            } else if (msg.type === "answer") {
-                // only apply answer if we are the offerer and expect an answer
-                const pc = peers.get(msg.from);
-            if (pc) {
-                    // correct state to accept an answer is "have-local-offer" (or local pranswer)
-                    const state = pc.signalingState;
-            if (state === "have-local-offer" || state === "have-local-pranswer") {
-                        try {
-                await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-            remoteDescReady.set(msg.from, true);
-
-            const queue = pendingCandidates.get(msg.from) || [];
-            for (const c of queue) {
-                                try {await pc.addIceCandidate(c); } catch (e) {console.warn("flush ICE err", e); }
+                    await pc.setLocalDescription(answer);
+                    ws.send(JSON.stringify({ type: "answer", to: peerId, data: answer }));
+                } else if (msg.type === "answer") {
+                    console.log("RX answer from", msg.from);
+                    const pc = peers.get(msg.from);
+                    if (pc) {
+                        // log current state for debugging
+                        console.log("pc.signalingState before answer:", pc.signalingState);
+                        // only accept answer if we are the offerer and are expecting an answer
+                        if (pc.signalingState === "have-local-offer" || pc.signalingState === "have-local-pranswer") {
+                            try {
+                                await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+                                remoteDescReady.set(msg.from, true);
+                                // flush any queued ICE candidates
+                                const queue = pendingCandidates.get(msg.from) || [];
+                                for (const c of queue) {
+                                    try { await pc.addIceCandidate(c); } catch (e) { console.warn("flush ICE err", e); }
+                                }
+                                pendingCandidates.set(msg.from, []);
+                                console.log("Applied remote answer for", msg.from);
+                            } catch (e) {
+                                console.warn("setRemoteDescription(answer) failed for", msg.from, e);
                             }
-            pendingCandidates.set(msg.from, []);
-                        } catch (e) {
-                console.warn("setRemoteDescription(answer) failed", e, "state:", state);
+                        } else {
+                            // avoid throwing InvalidStateError by skipping if not in expected state
+                            console.warn("Ignoring answer from", msg.from, "because signalingState is", pc.signalingState);
                         }
                     } else {
-                console.warn("Ignoring answer for", msg.from, "because signalingState is", state);
+                        console.warn("Received answer for unknown PC from", msg.from);
                     }
-                } else {
-                console.warn("Received answer for unknown pc from", msg.from);
-                }
-
-            } else if (msg.type === "ice-candidate") {
-                const pc = peers.get(msg.from);
-            if (pc) {
-                    const cand = new RTCIceCandidate(msg.data);
-            const ready = remoteDescReady.get(msg.from);
-            if (!ready) {
-                        const q = pendingCandidates.get(msg.from) || [];
-            q.push(cand);
-            pendingCandidates.set(msg.from, q);
-                    } else {
-                        try {await pc.addIceCandidate(cand); } catch (e) {console.warn("add ICE err", e); }
+                } else if (msg.type === "ice-candidate") {
+                    const pc = peers.get(msg.from);
+                    if (pc) {
+                        const cand = new RTCIceCandidate(msg.data);
+                        if (!remoteDescReady.get(msg.from)) {
+                            const q = pendingCandidates.get(msg.from) || [];
+                            q.push(cand); pendingCandidates.set(msg.from, q);
+                        } else {
+                            try { await pc.addIceCandidate(cand); } catch (e) { console.warn("add ICE err", e); }
+                        }
                     }
-                } else {
-                    // No pc yet — queue candidate in case we create pc shortly
-                    const q = pendingCandidates.get(msg.from) || [];
-            q.push(new RTCIceCandidate(msg.data));
-            pendingCandidates.set(msg.from, q);
+                } else if (msg.type === "peer-left") {
+                    closePeer(msg.user_id);
                 }
+            };
+        }
 
-            } else if (msg.type === "peer-left") {
-                closePeer(msg.user_id);
-            }
-        };
-    }
-
-    document.getElementById("muteBtn").onclick = () => {
-                localStream?.getAudioTracks().forEach(t => t.enabled = false);
+        document.getElementById("muteBtn").onclick = () => {
+            localStream?.getAudioTracks().forEach(t => t.enabled = false);
             document.getElementById("status").innerText = "Muted";
-    };
-    document.getElementById("unmuteBtn").onclick = () => {
-                localStream?.getAudioTracks().forEach(t => t.enabled = true);
+        };
+        document.getElementById("unmuteBtn").onclick = () => {
+            localStream?.getAudioTracks().forEach(t => t.enabled = true);
             document.getElementById("status").innerText = "Unmuted";
-    };
-
-    document.getElementById("leaveBtn").onclick = async () => {
-        try {
+        };
+        document.getElementById("leaveBtn").onclick = async () => {
+            try {
                 await fetch(BACKEND_HTTP + "/leave_room", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ user_id: USER, room_code: ROOM })
                 });
-        } catch (e) {
-                console.warn("leave_room failed", e);
-        } finally {
+            } catch { } finally {
                 ws?.close();
-            localStream?.getTracks().forEach(t => t.stop());
-            window.location.href = "/";
-        }
-    };
-
-    document.getElementById("sendBtn").onclick = () => {
-        const input = document.getElementById("chatInput");
+                localStream?.getTracks().forEach(t => t.stop());
+                if (FRONTEND_URL) { window.location.href = FRONTEND_URL; } else { window.location.href = "/"; }
+            }
+        };
+        document.getElementById("sendBtn").onclick = () => {
+            const input = document.getElementById("chatInput");
             const text = input.value.trim();
             if (!text || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({type: "chat", text: text }));
+            ws.send(JSON.stringify({ type: "chat", text: text }));
             addChatMessage(USER, text, true);
             input.value = "";
-    };
+        };
 
-    (async () => {
-                await initLocalMedia();
+        (async () => {
+            await initLocalMedia();
             await startWebSocket();
-    })();
-
-
+        })();
     </script>
-
 </body>
 
 </html>
