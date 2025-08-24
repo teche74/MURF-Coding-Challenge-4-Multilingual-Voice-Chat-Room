@@ -676,7 +676,6 @@ ROOM_HTML = """
 
         /***** Peer connection helpers *****/
         function shouldInitiateWith(peerId) {
-            // deterministic tie-breaker: lexicographic
             return String(USER) < String(peerId);
         }
 
@@ -724,11 +723,9 @@ ROOM_HTML = """
 
             resetPending(peerId);
 
-            // add local tracks if available
             if (localStream) localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
             pc.ontrack = (event) => {
-    // 1. Get or create audio element
     let audio = document.getElementById("audio-" + peerId);
     if (!audio) {
         audio = document.createElement("audio");
@@ -737,12 +734,10 @@ ROOM_HTML = """
         audio.playsInline = true;
         audio.muted = false; // make sure remote audio is audible
         document.body.appendChild(audio);
-        // try to play immediately
         audio.play().catch(e => console.warn("Autoplay blocked", e));
     }
     audio.srcObject = event.streams[0];
 
-    // 2. Visual speaking indicator using Web Audio API
     const el = document.getElementById(peerSlotMap.get(peerId));
     if (!el) return;
 
@@ -757,7 +752,6 @@ ROOM_HTML = """
     const detectSpeaking = () => {
         analyser.getByteFrequencyData(dataArray);
         const volume = dataArray.reduce((a, b) => a + b, 0);
-        // threshold: tweak 30–80 depending on mic volume
         el.classList.toggle("speaking", volume > 50);
         requestAnimationFrame(detectSpeaking);
     };
@@ -767,7 +761,6 @@ ROOM_HTML = """
 
             pc.onicecandidate = (event) => {
                 if (event.candidate) {
-                    // send candidate to the peer
                     ws?.send(JSON.stringify({
                         type: "ice-candidate",
                         to: peerId,
