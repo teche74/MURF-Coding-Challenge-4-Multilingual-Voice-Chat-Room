@@ -386,7 +386,7 @@ ROOM_HTML = """
         const USER = qs.get("user_id") || "";
         const BACKEND_HTTP = location.origin;
         const WS_URL = BACKEND_HTTP.replace(/^http/i, "ws") + "/ws?room_code=" + encodeURIComponent(ROOM) + "&user_id=" + encodeURIComponent(USER);
-        const FRONTEND_URL = {{ FRONTEND_URL_JSON }};
+        const FRONTEND_URL = {{FRONTEND_URL_JSON}};
 
         console.log("WS_URL", WS_URL, "HTTP", BACKEND_HTTP, "ROOM", ROOM, "USER", USER);
         document.getElementById('roomName').innerText = ROOM;
