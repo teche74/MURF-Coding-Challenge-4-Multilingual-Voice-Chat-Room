@@ -272,11 +272,14 @@
 
         window.APP_CONFIG = {
             WS_URL: {{ WS_URL }},
-        BACKEND_HTTP: { { BACKEND_HTTP } },
-        ROOM: { { ROOM } },
-        USER: { { USER } }
+            BACKEND_HTTP: {{ BACKEND_HTTP }},
+            ROOM: {{ ROOM }},
+            USER: {{ USER }}
         };
+        
         const { WS_URL, BACKEND_HTTP, ROOM, USER } = window.APP_CONFIG;
+
+        console.log(WS_URL , BACKEND_HTTP , ROOM , USER)
 
         document.getElementById('roomName').innerText = ROOM;
 
