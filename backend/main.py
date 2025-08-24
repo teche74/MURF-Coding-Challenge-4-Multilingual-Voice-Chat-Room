@@ -1,18 +1,29 @@
-import sys, os, time, random, string, logging, asyncio, base64
+import sys
+import os
+import time
+import random
+import string
+import logging
+import asyncio
+import base64
+
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from typing import Dict, Optional, Tuple
-import json
-
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 from authlib.integrations.starlette_client import OAuth
-from urllib.parse import unquote, quote
-
+from urllib.parse import quote
 from dotenv import load_dotenv
+
+try:
+    from livekit.api import AccessToken, VideoGrants
+except Exception:
+    AccessToken = None
+    VideoGrants = None
 
 from backend.speech_to_text_and_translation_utils import speech_to_text, translate_text
 from backend.murf_api import generate_speech_from_text
@@ -26,38 +37,56 @@ load_dotenv(env_path)
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://chatfree.streamlit.app")
+
 oauth = OAuth()
-oauth.register(
-    name='google',
-    client_id=CLIENT_ID,
-    client_secret=CLIENT_SECRET,
-    jwks_uri='https://www.googleapis.com/oauth2/v3/certs',
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={'scope': 'email openid'}
-)
+if CLIENT_ID and CLIENT_SECRET:
+    oauth.register(
+        name='google',
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        jwks_uri='https://www.googleapis.com/oauth2/v3/certs',
+        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+        client_kwargs={'scope': 'email openid'}
+    )
+
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
+LIVEKIT_URL = os.getenv("LIVEKIT_URL")
+
+if not (LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL):
+    logger.warning("LiveKit credentials not set. Set LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL in .env")
+
 users: Dict[str, Dict] = {}
 rooms: Dict[str, Dict] = {}
 MAX_ROOM_CAPACITY = 4
 TTS_CACHE: Dict[Tuple[str, str, str], Tuple[bytes, float]] = {}
 CACHE_TTL_SECONDS = 60 * 5
+
 app = FastAPI(title="Multilingual Chat Room")
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY", "super-secret"))
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
+
+
 def generate_room_code(length: int = 6) -> str:
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
 
 def get_user_name(user_id: str) -> str:
     return users.get(user_id, {}).get("name", user_id)
 
-def ensure_user(user_id: str):
+
+def ensure_user(user_id: str, language: str = "en"):
     """Best-effort auto-upsert so restarts don't break room join/create."""
     if user_id not in users:
         name = (user_id.split("@")[0] if "@" in user_id else user_id)[:32]
-        users[user_id] = {"name": name, "language": "en"}
+        users[user_id] = {"name": name, "language": language}
+    else:
+        users[user_id].setdefault("language", language)
 
-async def synthesize_with_cache(text: str, target_lang: str, voice: str="default"):
+
+async def synthesize_with_cache(text: str, target_lang: str, voice: str = "default"):
     key = (text, target_lang, voice)
     now = time.time()
     entry = TTS_CACHE.get(key)
@@ -66,17 +95,32 @@ async def synthesize_with_cache(text: str, target_lang: str, voice: str="default
     audio_bytes = await asyncio.to_thread(generate_speech_from_text, text, target_lang, voice)
     TTS_CACHE[key] = (audio_bytes, now)
     return audio_bytes
+
+
 class CreateRoomRequest(BaseModel):
     user_id: str
     public: bool = True
+    language: Optional[str] = "en"
+
 
 class JoinRoomRequest(BaseModel):
     user_id: str
     room_code: Optional[str] = None
+    language: Optional[str] = "en"
+
 
 class LeaveRoomRequest(BaseModel):
     user_id: str
     room_code: str
+
+
+class LiveKitJoinTokenReq(BaseModel):
+    room_code: str
+    user_id: str
+    name: Optional[str] = None
+    language: Optional[str] = "en"
+
+
 @app.get("/room_info")
 def room_info(room_code: str):
     room = rooms.get(room_code)
@@ -84,17 +128,19 @@ def room_info(room_code: str):
         raise HTTPException(status_code=404, detail="Room not found")
     return {"members": room["members"]}
 
+
 @app.post("/create_room")
 def create_room(req: CreateRoomRequest):
-    ensure_user(req.user_id)
+    ensure_user(req.user_id, req.language or "en")
     room_code = generate_room_code()
-    rooms[room_code] = {"members": [req.user_id], "public": req.public}
+    rooms[room_code] = {"members": [{"user_id": req.user_id, "language": req.language or "en"}], "public": req.public}
     logger.info(f"room created {room_code} by {req.user_id}")
     return {"status": "success", "room_code": room_code}
 
+
 @app.post("/join_room")
 def join_room(req: JoinRoomRequest):
-    ensure_user(req.user_id)
+    ensure_user(req.user_id, req.language or "en")
 
     if req.room_code:
         room = rooms.get(req.room_code)
@@ -102,31 +148,34 @@ def join_room(req: JoinRoomRequest):
             raise HTTPException(status_code=400, detail="Room not found")
         if len(room["members"]) >= MAX_ROOM_CAPACITY:
             raise HTTPException(status_code=400, detail="Room full")
-        if req.user_id not in room["members"]:
-            room["members"].append(req.user_id)
+        if not any(m["user_id"] == req.user_id for m in room["members"]):
+            room["members"].append({"user_id": req.user_id, "language": req.language or "en"})
         return {"status": "success", "room_code": req.room_code}
     else:
         public_rooms = [code for code, r in rooms.items() if r["public"] and len(r["members"]) < MAX_ROOM_CAPACITY]
         if not public_rooms:
             raise HTTPException(status_code=400, detail="No public rooms available")
         selected_code = random.choice(public_rooms)
-        if req.user_id not in rooms[selected_code]["members"]:
-            rooms[selected_code]["members"].append(req.user_id)
+        if not any(m["user_id"] == req.user_id for m in rooms[selected_code]["members"]):
+            rooms[selected_code]["members"].append({"user_id": req.user_id, "language": req.language or "en"})
         return {"status": "success", "room_code": selected_code}
+
 
 @app.post("/leave_room")
 def leave_room(req: LeaveRoomRequest):
     room = rooms.get(req.room_code)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
-    if req.user_id in room["members"]:
-        room["members"].remove(req.user_id)
-        logger.info(f"user {req.user_id} left room {req.room_code} via API")
+    room["members"] = [m for m in room["members"] if m["user_id"] != req.user_id]
+    logger.info(f"user {req.user_id} left room {req.room_code} via API")
     return {"status": "success"}
+
+
 @app.get("/login/google")
 async def login_google(request: Request):
     redirect_uri = request.url_for('auth_callback')
     return await oauth.google.authorize_redirect(request, redirect_uri, access_type="offline")
+
 
 @app.get("/auth/callback")
 async def auth_callback(request: Request):
@@ -143,6 +192,8 @@ async def auth_callback(request: Request):
     users[user_email] = {"name": user_email.split('@')[0], "language": "en"}
     frontend_url = f"{FRONTEND_URL}/?user_id={quote(user_email)}&name={quote(users[user_email]['name'])}"
     return RedirectResponse(frontend_url)
+
+
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...), target_lang: str = "en"):
     audio_bytes = await file.read()
@@ -164,159 +215,64 @@ async def transcribe_audio(file: UploadFile = File(...), target_lang: str = "en"
         tts_audio = b""
     tts_base64 = base64.b64encode(tts_audio).decode("utf-8")
     return {"text": translated_text, "tts_audio_base64": tts_base64}
-class WSRoomManager:
-    def __init__(self):
-        self.rooms_ws: Dict[str, Dict[str, WebSocket]] = {}
-        self._recent_signals: Dict[Tuple, float] = {}
-        self._dedupe_ttl = 2.0 
 
-    async def connect(self, room_code: str, user_id: str, ws: WebSocket):
-        await ws.accept()
-        self.rooms_ws.setdefault(room_code, {})
-        self.rooms_ws[room_code][user_id] = ws
-        logger.info(f"WS connect {user_id} -> {room_code} (total {len(self.rooms_ws[room_code])})")
 
-    def disconnect(self, room_code: str, user_id: str):
-        if room_code in self.rooms_ws:
-            self.rooms_ws[room_code].pop(user_id, None)
-            if not self.rooms_ws[room_code]:
-                self.rooms_ws.pop(room_code, None)
-        logger.info(f"WS disconnect {user_id} from {room_code}")
+@app.post("/livekit/join-token")
+def livekit_join_token(req: LiveKitJoinTokenReq):
+    """
+    Returns a LiveKit access token and LiveKit URL. Client will use these to connect to LiveKit (SFU) directly.
+    - req.room_code: string
+    - req.user_id: string
+    - req.name: optional display name
+    - req.language: optional language preference (stored server-side)
+    """
+    if not (LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL):
+        raise HTTPException(500, "LiveKit is not configured on server.")
 
-    async def peers_in_room(self, room_code: str, exclude: str = "") -> Dict[str, WebSocket]:
-        return {uid: sock for uid, sock in self.rooms_ws.get(room_code, {}).items() if uid != exclude}
+    ensure_user(req.user_id, req.language or "en")
+    room = rooms.get(req.room_code)
+    if not room:
+        rooms[req.room_code] = {"members": [{"user_id": req.user_id, "language": req.language or "en"}], "public": True}
+    else:
+        if not any(m["user_id"] == req.user_id for m in room["members"]):
+            room["members"].append({"user_id": req.user_id, "language": req.language or "en"})
+        else:
+            for m in room["members"]:
+                if m["user_id"] == req.user_id:
+                    m["language"] = req.language or m.get("language", "en")
 
-    async def send_json(self, ws: WebSocket, payload: dict):
-        await ws.send_json(payload)
+    if AccessToken is None or VideoGrant is None:
+        raise HTTPException(500, "LiveKit server SDK is not available on the server (check pip install).")
 
-    async def relay(self, room_code: str, from_user: str, target_user: str, payload: dict):
-        """
-        Relay a signaling payload to a specific target_user.
-        - Do not send to self.
-        - Dedupe identical payloads for a short window to avoid duplicates being re-applied.
-        """
-        if from_user == target_user:
-            logger.warning(f"Skipping relay: sender==target ({from_user})")
-            return
+    at = AccessToken().with_identity(req.user_id).with_name(req.name or req.user_id).with_grants(
+        VideoGrants(room_join=True, room=req.room_code, can_publish=True, can_subscribe=True, can_publish_data=True)
+    )
+    token_jwt = at.to_jwt()
+    return {"token": token_jwt, "url": LIVEKIT_URL, "room_code": req.room_code}
 
-        target_ws = self.rooms_ws.get(room_code, {}).get(target_user)
-        if not target_ws:
-            logger.warning(f"Relay target not connected: {target_user} in {room_code}")
-            return
 
-        try:
-            data_serialized = json.dumps(payload.get("data", ""), sort_keys=True)
-        except Exception:
-            data_serialized = str(payload.get("data", ""))
-
-        key = (room_code, from_user, target_user, payload.get("type"), data_serialized)
-        now = time.time()
-        last_ts = self._recent_signals.get(key)
-        if last_ts and (now - last_ts) < self._dedupe_ttl:
-            logger.info("Dropping duplicate signaling msg (within TTL) %s -> %s type=%s", from_user, target_user, payload.get("type"))
-            return
-
-        self._recent_signals[key] = now
-        for k, ts in list(self._recent_signals.items()):
-            if now - ts > self._dedupe_ttl:
-                self._recent_signals.pop(k, None)
-
-        try:
-            await target_ws.send_json(payload)
-        except Exception as e:
-            logger.warning("Failed to relay to %s: %s", target_user, e)
-
-ws_manager = WSRoomManager()
-
-@app.websocket("/ws")
-async def ws_endpoint(websocket: WebSocket):
-    room_code = unquote(websocket.query_params.get("room_code", ""))
-    user_id = unquote(websocket.query_params.get("user_id", ""))
-
-    if not room_code or not user_id:
-        await websocket.close()
-        return
-
-    room = rooms.get(room_code)
-    if not room or user_id not in room["members"]:
-        await websocket.close()
-        return
-
-    await ws_manager.connect(room_code, user_id, websocket)
-
-    existing_peers = list((await ws_manager.peers_in_room(room_code, exclude=user_id)).keys())
-    peers_payload = [{"user_id": uid, "name": get_user_name(uid)} for uid in existing_peers]
-    await ws_manager.send_json(websocket, {"type": "peers", "peers": peers_payload})
-
-    for peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).values():
-        try:
-            await ws_manager.send_json(peer_ws, {
-                "type": "peer-joined",
-                "user_id": user_id,
-                "name": get_user_name(user_id)
-            })
-        except Exception:
-            pass
-
-    try:
-        while True:
-            msg = await websocket.receive_json()
-            mtype = msg.get("type")
-            to_user = msg.get("to")
-            data = msg.get("data", {})
-
-            if mtype in ("offer", "answer", "ice-candidate") and to_user:
-                await ws_manager.relay(room_code, user_id, to_user, {
-                "type": mtype,
-                "from": user_id,
-                "name": get_user_name(user_id),
-                "data": data
-            })
-            elif mtype == "chat":
-                text = msg.get("text", "")
-                broadcast_payload = {"type": "chat", "from": user_id, "name": get_user_name(user_id), "text": text}
-                for peer_ws in (await ws_manager.peers_in_room(room_code, exclude="")).values():
-                    try:
-                        await ws_manager.send_json(peer_ws, broadcast_payload)
-                    except Exception:
-                        pass
-
-    except WebSocketDisconnect:
-        logger.info(f"Websocket disconnect for {user_id}")
-    except Exception as e:
-        logger.exception("ws error: %s", e)
-    finally:
-        for peer_ws in (await ws_manager.peers_in_room(room_code, exclude=user_id)).values():
-            try:
-                await ws_manager.send_json(peer_ws, {"type": "peer-left", "user_id": user_id})
-            except Exception:
-                pass
-        ws_manager.disconnect(room_code, user_id)
-
-        room = rooms.get(room_code)
-        if room and user_id in room["members"]:
-            try:
-                room["members"].remove(user_id)
-                logger.info(f"Removed {user_id} from room {room_code} after websocket close")
-            except Exception:
-                pass
 ROOM_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Voice Room</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>LiveKit Multilingual Voice Room</title>
     <style>
-        /* (styles unchanged — omitted for brevity here in the snippet but keep your full CSS) */
+        :root {
+            --bg1: #0f2027;
+            --bg2: #2c5364;
+            --accent: #0ff;
+        }
+
         body {
             margin: 0;
             font-family: 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
             color: #eee;
-            display: flex;
+            background: linear-gradient(135deg, var(--bg1), #203a43, var(--bg2));
             height: 100vh;
+            display: flex;
         }
 
         .app-container {
@@ -325,202 +281,146 @@ ROOM_HTML = """
         }
 
         .sidebar {
-            width: 250px;
-            background: rgba(0, 0, 0, 0.5);
-            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            width: 270px;
             padding: 20px;
-            backdrop-filter: blur(10px);
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
+            background: rgba(0, 0, 0, 0.45);
+            border-right: 1px solid rgba(255, 255, 255, 0.06);
         }
 
         .room-title {
-            font-size: 18px;
-            color: #0ff;
-            margin-bottom: 6px;
+            color: var(--accent);
+            font-weight: 600;
+            margin-bottom: 8px;
         }
 
-        .participants-list {
+        ul.participants-list {
             list-style: none;
             padding: 0;
-            margin: 0;
+            margin: 0 0 12px 0;
+            max-height: 40vh;
+            overflow: auto;
         }
 
-        .participants-list li {
+        ul.participants-list li {
             padding: 8px;
-            margin: 4px 0;
-            background: rgba(255, 255, 255, 0.05);
             border-radius: 8px;
-            font-size: 14px;
+            margin-bottom: 6px;
+            background: rgba(255, 255, 255, 0.03);
             display: flex;
             justify-content: space-between;
-            align-items: center;
         }
 
         .me-badge {
-            background: #0ff;
+            background: var(--accent);
             color: #000;
-            font-size: 11px;
-            border-radius: 6px;
             padding: 2px 6px;
-            margin-left: 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            margin-left: 6px;
         }
 
-        .main-content {
+        .main {
             flex: 1;
-            display: flex;
-            flex-direction: column;
             padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
         }
 
-        .status-bar {
+        .status {
             text-align: center;
-            margin-bottom: 15px;
-            font-size: 14px;
-            color: #0ff;
+            color: var(--accent);
         }
 
-        .user-grid {
+        .grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            grid-template-rows: repeat(2, 1fr);
-            gap: 20px;
-            margin-bottom: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 18px;
         }
 
-        .user-card {
-            width: 150px;
-            height: 180px;
-            border-radius: 20px;
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(8px);
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        .tile {
+            height: 160px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.03);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            transition: all 0.3s ease;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 12px;
         }
 
-        .user-card .avatar {
-            width: 80px;
-            height: 80px;
+        .tile.speaking {
+            box-shadow: 0 0 18px rgba(0, 255, 255, 0.12);
+            transform: scale(1.02);
+        }
+
+        .avatar {
+            width: 72px;
+            height: 72px;
             border-radius: 50%;
-            background: rgba(255, 255, 255, 0.2);
-            margin-bottom: 10px;
+            background: rgba(255, 255, 255, 0.12);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 36px;
-        }
-
-        .user-card .username {
-            color: #fcfcfc;
-            font-weight: 600;
-            text-align: center;
-        }
-
-        .user-card.speaking .avatar {
-            box-shadow: 0 0 20px #00f2fe, 0 0 40px #4facfe;
-            transform: scale(1.1);
-        }
-
-        .user-card.empty .avatar {
-            background: rgba(255, 255, 255, 0.05);
+            font-size: 28px;
+            margin-bottom: 8px;
         }
 
         .controls {
             display: flex;
+            gap: 12px;
             justify-content: center;
-            gap: 20px;
-            margin-bottom: 15px;
+            margin-top: 6px;
         }
 
-        .control-btn {
-            padding: 12px 18px;
-            font-size: 16px;
+        button {
+            padding: 10px 14px;
+            border-radius: 10px;
             border: none;
-            border-radius: 12px;
             cursor: pointer;
             background: #333;
-            color: #eee;
-            transition: all 0.2s ease;
-        }
-
-        .control-btn:hover {
-            background: #444;
-        }
-
-        .leave {
-            background: #b00020;
             color: #fff;
         }
 
-        .leave:hover {
-            background: #d00030;
+        button.primary {
+            background: var(--accent);
+            color: #000;
         }
 
-        .control-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .chat-box {
-            flex: 1;
+        .chat {
+            margin-top: 8px;
+            background: rgba(0, 0, 0, 0.35);
+            border-radius: 10px;
+            padding: 8px;
             display: flex;
             flex-direction: column;
-            background: rgba(0, 0, 0, 0.4);
-            border-radius: 12px;
-            overflow: hidden;
-            backdrop-filter: blur(5px);
+            gap: 6px;
+            height: 180px;
         }
 
-        .messages {
+        .chat .messages {
             flex: 1;
-            padding: 10px;
-            overflow-y: auto;
+            overflow: auto;
+            padding: 6px;
         }
 
-        .message {
-            margin: 6px 0;
-            padding: 8px 12px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            max-width: 85%;
-        }
-
-        .message.me {
-            background: rgba(0, 255, 255, 0.2);
-            align-self: flex-end;
-        }
-
-        .chat-input {
+        .chat .input {
             display: flex;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            gap: 6px;
         }
 
-        .chat-input input {
+        .chat input {
             flex: 1;
-            padding: 12px;
+            padding: 8px;
+            border-radius: 8px;
             border: none;
-            outline: none;
-            background: rgba(0, 0, 0, 0.5);
+            background: rgba(255, 255, 255, 0.03);
             color: #fff;
         }
 
-        .chat-input button {
-            padding: 0 20px;
-            background: #0ff;
-            border: none;
-            color: #000;
-            cursor: pointer;
-            transition: 0.2s;
-        }
-
-        .chat-input button:hover {
-            background: #0cc;
+        .small {
+            font-size: 12px;
+            opacity: 0.85;
         }
     </style>
 </head>
@@ -528,460 +428,408 @@ ROOM_HTML = """
 <body>
     <div class="app-container">
         <aside class="sidebar">
+            <h3 class="room-title">Room <span id="roomName"></span></h3>
+
             <div>
-                <h2 class="room-title">Room: <span id="roomName"></span></h2>
-                <ul id="participants" class="participants-list"></ul>
+                <label class="small">Your language:</label>
+                <div id="myLang" class="small" style="margin-bottom:10px;">-</div>
             </div>
-            <div class="chat-box">
-                <div id="chat-messages" class="messages"></div>
-                <div class="chat-input">
-                    <input type="text" id="chatInput" placeholder="Type a message..." />
-                    <button id="sendBtn">➤</button>
+
+            <h4 class="small">Participants</h4>
+            <ul id="participants" class="participants-list"></ul>
+
+            <div style="margin-top:12px;">
+                <div class="chat">
+                    <div id="chatMessages" class="messages"></div>
+                    <div class="input">
+                        <input id="chatInput" placeholder="Type a message..." />
+                        <button id="sendChatBtn">Send</button>
+                    </div>
                 </div>
             </div>
         </aside>
-        <main class="main-content">
-            <div id="status" class="status-bar">Connecting...</div>
-            <div class="user-grid">
-                <div class="user-card empty" id="user1">
-                    <div class="avatar">🙂</div>
-                    <div class="username">Empty</div>
-                </div>
-                <div class="user-card empty" id="user2">
-                    <div class="avatar">🙂</div>
-                    <div class="username">Empty</div>
-                </div>
-                <div class="user-card empty" id="user3">
-                    <div class="avatar">🙂</div>
-                    <div class="username">Empty</div>
-                </div>
-                <div class="user-card empty" id="user4">
-                    <div class="avatar">🙂</div>
-                    <div class="username">Empty</div>
-                </div>
+
+        <main class="main">
+            <div class="status" id="status">Initializing...</div>
+
+            <div class="grid" id="tiles">
             </div>
+
             <div class="controls">
-                <button id="muteBtn" class="control-btn" disabled>🔇 Mute</button>
-                <button id="unmuteBtn" class="control-btn" disabled>🎙️ Unmute</button>
-                <button id="leaveBtn" class="control-btn leave">❌ Leave</button>
+                <button id="joinBtn" class="primary">Join Call</button>
+                <button id="muteBtn" disabled>🔇 Mute</button>
+                <button id="unmuteBtn" disabled>🎙️ Unmute</button>
+                <button id="leaveBtn">❌ Leave</button>
             </div>
         </main>
     </div>
 
-    <script>
-        /***** Config *****/
-        const qs = new URLSearchParams(location.search);
-        const ROOM = qs.get("room_code") || "";
-        const USER = qs.get("user_id") || "";
-        const BACKEND_HTTP = location.origin;
-        const WS_URL = BACKEND_HTTP.replace(/^http/i, "ws") + "/ws?room_code=" + encodeURIComponent(ROOM) + "&user_id=" + encodeURIComponent(USER);
-        const FRONTEND_URL = {{FRONTEND_URL_JSON}};
+    <script type="module">
+        (async () => {
+            const qs = new URLSearchParams(location.search);
+            const ROOM = qs.get("room_code") || "";
+            const USER = qs.get("user_id") || "";
+            const MY_LANG = qs.get("lang") || ""; 
+            document.getElementById('roomName').innerText = ROOM || "[unknown]";
 
-        console.log("WS_URL", WS_URL, "HTTP", BACKEND_HTTP, "ROOM", ROOM, "USER", USER);
-        document.getElementById('roomName').innerText = ROOM;
+            const TOKEN_ENDPOINT = "/livekit/join-token";
 
-        /***** State *****/
-        let localStream = null;
-        let ws = null;
-        const peers = new Map(); // peerId -> RTCPeerConnection
-        const userSlots = ["user1", "user2", "user3", "user4"];
-        const peerSlotMap = new Map();
-        const remoteDescReady = new Map();       // peerId -> bool
-        const participants = new Set();
-        const pendingCandidates = new Map();     // peerId -> [ICE candidates]
-
-        /***** Helpers UI *****/
-        function updateParticipantsUI() {
-            const list = document.getElementById("participants");
-            list.innerHTML = "";
-            for (let uid of participants) {
-                const li = document.createElement("li");
-                const you = uid === USER ? '<span class="me-badge">You</span>' : '';
-                li.innerHTML = `<span>${uid}</span>${you}`;
-                list.appendChild(li);
-            }
-        }
-        function assignSlot(userId, label) {
-            if (peerSlotMap.has(userId)) return peerSlotMap.get(userId);
-            for (let slot of userSlots) {
-                const el = document.getElementById(slot);
-                if (el.classList.contains("empty")) {
-                    el.classList.remove("empty");
-                    el.querySelector(".username").innerText = label || userId;
-                    peerSlotMap.set(userId, slot);
-                    participants.add(userId);
-                    updateParticipantsUI();
-                    return slot;
-                }
-            }
-            return null;
-        }
-        function removeSlot(userId) {
-            const slot = peerSlotMap.get(userId);
-            if (!slot) return;
-            const el = document.getElementById(slot);
-            el.classList.add("empty");
-            el.classList.remove("speaking");
-            el.querySelector(".username").innerText = "Empty";
-            peerSlotMap.delete(userId);
-            participants.delete(userId);
-            updateParticipantsUI();
-        }
-        function addChatMessage(fromUser, text, isMe = false) {
-            const box = document.getElementById("chat-messages");
-            const div = document.createElement("div");
-            div.className = "message" + (isMe ? " me" : "");
-            const name = isMe ? "You" : fromUser;
-            div.innerHTML = `<strong>${name}:</strong> ${text}`;
-            box.appendChild(div);
-            box.scrollTop = box.scrollHeight;
-        }
-
-        /***** Local media *****/
-        async function initLocalMedia() {
+            let lk;
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                document.getElementById("status").innerText = "Mic ready";
-                document.getElementById("muteBtn").disabled = false;
-                document.getElementById("unmuteBtn").disabled = false;
-                assignSlot(USER, `You (${USER})`);
-            } catch (e) {
-                document.getElementById("status").innerText = "Mic access denied";
-                console.warn("getUserMedia failed", e);
+                lk = await import('https://cdn.skypack.dev/livekit-client@^1.5.0');
+            } catch (err) {
+                console.error("Failed to load livekit-client from CDN", err);
+                document.getElementById('status').innerText = "Failed to load LiveKit client. Check network.";
+                return;
             }
-        }
+            const { connect, RoomEvent, Track, createLocalTracks } = lk;
 
-        /***** Peer connection helpers *****/
-        function shouldInitiateWith(peerId) {
-            return String(USER) < String(peerId);
-        }
+            let room = null;
+            let localAudioTrack = null;
+            let audioCtx = null;
+            let joined = false;
+            const participants = new Map(); 
+            const tilesByIdentity = new Map(); 
+            const preferredLanguage = MY_LANG || ''; 
 
-        function resetPending(peerId) {
-            remoteDescReady.set(peerId, false);
-            pendingCandidates.set(peerId, pendingCandidates.get(peerId) || []);
-        }
 
-        function addCandidateToQueue(peerId, cand) {
-            const q = pendingCandidates.get(peerId) || [];
-            q.push(cand);
-            pendingCandidates.set(peerId, q);
-        }
-
-        function flushCandidates(peerId, pc) {
-            const q = pendingCandidates.get(peerId) || [];
-            pendingCandidates.set(peerId, []);
-            (async () => {
-                for (const c of q) {
-                    try { await pc.addIceCandidate(c); } catch (e) { console.warn("flush ICE err", e); }
+            function addParticipantListEntry(id, name, isMe = false) {
+                const ul = document.getElementById("participants");
+                let li = ul.querySelector(`[data-id="${CSS.escape(id)}"]`);
+                if (!li) {
+                    li = document.createElement("li");
+                    li.dataset.id = id;
+                    li.innerHTML = `<span>${name}</span>${isMe ? '<span class="me-badge">You</span>' : ''}`;
+                    ul.appendChild(li);
+                } else {
+                    li.querySelector("span").innerText = name;
                 }
-            })();
-        }
-
-        function closePeer(peerId) {
-            const pc = peers.get(peerId);
-            if (pc) {
-                try { pc.close(); } catch (e) { console.warn(e); }
-                peers.delete(peerId);
             }
-            const a = document.getElementById("audio-" + peerId);
-            if (a) a.remove();
-            removeSlot(peerId);
-            pendingCandidates.delete(peerId);
-            remoteDescReady.delete(peerId);
-            console.log("Closed peer", peerId);
-        }
 
-        async function createPeerConnection(peerId) {
-            if (peers.has(peerId)) return peers.get(peerId);
+            function removeParticipantListEntry(id) {
+                const ul = document.getElementById("participants");
+                const li = ul.querySelector(`[data-id="${CSS.escape(id)}"]`);
+                if (li) li.remove();
+            }
 
-            const pc = new RTCPeerConnection({
-                iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+            function createTile(identity, displayName) {
+                if (tilesByIdentity.has(identity)) return tilesByIdentity.get(identity);
+                const div = document.createElement("div");
+                div.className = "tile";
+                div.id = "tile-" + btoa(identity).replace(/=/g, '');
+                div.innerHTML = `
+        <div class="avatar">🙂</div>
+        <div class="username">${displayName || identity}</div>
+        <div class="small" style="margin-top:8px;">lang: <span class="lang">-</span></div>
+      `;
+                document.getElementById("tiles").appendChild(div);
+                tilesByIdentity.set(identity, div);
+                return div;
+            }
+
+            function removeTile(identity) {
+                const t = tilesByIdentity.get(identity);
+                if (t) { t.remove(); tilesByIdentity.delete(identity); }
+            }
+
+            function setTileSpeaking(identity, speaking) {
+                const t = tilesByIdentity.get(identity);
+                if (!t) return;
+                t.classList.toggle("speaking", !!speaking);
+            }
+
+            function setTileLanguage(identity, lang) {
+                const t = tilesByIdentity.get(identity);
+                if (!t) return;
+                const el = t.querySelector(".lang");
+                if (el) el.innerText = lang || "-";
+            }
+
+            function addChatMessage(from, text, me = false) {
+                const box = document.getElementById("chatMessages");
+                const d = document.createElement("div");
+                d.className = "small";
+                d.innerHTML = `<strong>${me ? "You" : from}:</strong> ${text}`;
+                box.appendChild(d);
+                box.scrollTop = box.scrollHeight;
+            }
+
+            function ensureAudioContext() {
+                if (audioCtx == null) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state !== "running") {
+                    const resume = () => {
+                        audioCtx.resume().catch(() => { });
+                        window.removeEventListener("click", resume);
+                        window.removeEventListener("keydown", resume);
+                    };
+                    window.addEventListener("click", resume, { once: true });
+                    window.addEventListener("keydown", resume, { once: true });
+                }
+            }
+
+            function attachAudioTrack(track, identity) {
+                let existing = document.getElementById("audio-" + btoa(identity).replace(/=/g, ''));
+                if (existing) existing.remove();
+
+                const audio = document.createElement("audio");
+                audio.id = "audio-" + btoa(identity).replace(/=/g, '');
+                audio.autoplay = true;
+                audio.playsInline = true;
+                audio.controls = false;
+                audio.muted = false; 
+                audio.style.display = "none";
+                document.body.appendChild(audio);
+                const el = track.attach();
+                if (el.tagName && el.tagName.toLowerCase() === "audio") {
+                    audio.srcObject = el.srcObject || el.src;
+                } else {
+                    audio.srcObject = track.mediaStreamTrack ? new MediaStream([track.mediaStreamTrack]) : null;
+                }
+
+                try {
+                    ensureAudioContext();
+                    const ctx = audioCtx;
+                    const analyser = ctx.createAnalyser();
+                    const src = ctx.createMediaElementSource(audio);
+                    src.connect(analyser);
+                    analyser.fftSize = 256;
+                    const data = new Uint8Array(analyser.frequencyBinCount);
+                    let raf;
+                    const detect = () => {
+                        analyser.getByteFrequencyData(data);
+                        const v = data.reduce((a, b) => a + b, 0);
+                        setTileSpeaking(identity, v > 50);
+                        raf = requestAnimationFrame(detect);
+                    };
+                    detect();
+                    audio.addEventListener("ended", () => { cancelAnimationFrame(raf); });
+                } catch (e) {
+                    console.warn("Audio analyser unavailable", e);
+                }
+
+                audio.play().catch(e => {
+                    console.debug("autoplay blocked", e);
+                });
+
+                return audio;
+            }
+
+            async function joinCall() {
+                if (!ROOM || !USER) {
+                    alert("Missing room_code or user_id in URL query");
+                    return;
+                }
+                document.getElementById('status').innerText = "Requesting token...";
+                let tokenResp;
+                try {
+                    tokenResp = await fetch(TOKEN_ENDPOINT, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ room_code: ROOM, user_id: USER, name: USER, language: preferredLanguage })
+                    });
+                } catch (e) {
+                    console.error("Token fetch failed", e);
+                    document.getElementById('status').innerText = "Token request failed";
+                    return;
+                }
+                if (!tokenResp.ok) {
+                    const body = await tokenResp.text();
+                    console.error("Token endpoint error", tokenResp.status, body);
+                    document.getElementById('status').innerText = "Token request error";
+                    return;
+                }
+                const { token, url: livekitUrl } = await tokenResp.json();
+                document.getElementById('status').innerText = "Connecting to LiveKit...";
+
+                try {
+                    room = await connect(livekitUrl, token, { name: USER });
+                } catch (e) {
+                    console.error("LiveKit connect failed", e);
+                    document.getElementById('status').innerText = "LiveKit connect failed";
+                    return;
+                }
+
+                document.getElementById('status').innerText = "Connected (LiveKit)";
+
+                document.getElementById('myLang').innerText = preferredLanguage || "(unknown)";
+
+                room.on(RoomEvent.ParticipantConnected, participant => {
+                    console.log("participantConnected", participant.identity);
+                    onParticipantConnected(participant);
+                });
+                room.on(RoomEvent.ParticipantDisconnected, participant => {
+                    console.log("participantDisconnected", participant.identity);
+                    onParticipantDisconnected(participant);
+                });
+                room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+                    const speakingIds = new Set(speakers.map(s => s.identity));
+                    for (const id of tilesByIdentity.keys()) {
+                        setTileSpeaking(id, speakingIds.has(id));
+                    }
+                });
+
+                room.on(RoomEvent.DataReceived, (payload, participant) => {
+                    try {
+                        const text = new TextDecoder().decode(payload);
+                        const parsed = JSON.parse(text);
+                        if (parsed.type === "chat") {
+                            addChatMessage(parsed.from, parsed.text, parsed.from === USER);
+                        } else if (parsed.type === "subtitle") {
+                            console.log("subtitle", parsed);
+                        }
+                    } catch (e) {
+                        console.warn("Failed to parse data message", e);
+                    }
+                });
+
+                try {
+                    const tracks = await createLocalTracks({ audio: true });
+                    if (tracks && tracks.length > 0) {
+                        localAudioTrack = tracks.find(t => t.kind === Track.Kind.Audio);
+                        await room.localParticipant.publishTrack(localAudioTrack);
+                        document.getElementById('status').innerText = "Published local audio";
+                        document.getElementById('muteBtn').disabled = false;
+                        document.getElementById('unmuteBtn').disabled = false;
+                    } else {
+                        document.getElementById('status').innerText = "No local tracks available";
+                    }
+                } catch (e) {
+                    console.error("Failed to create/publish local tracks", e);
+                    document.getElementById('status').innerText = "Microphone access denied";
+                }
+
+                for (const p of room.participants.values()) {
+                    onParticipantConnected(p);
+                }
+
+                joined = true;
+            }
+
+            async function onParticipantConnected(participant) {
+                participants.set(participant.identity, participant);
+                addParticipantListEntry(participant.identity, participant.name || participant.identity, participant.identity === USER);
+                createTile(participant.identity, participant.name || participant.identity);
+
+                if (participant.metadata) {
+                    try {
+                        const meta = JSON.parse(participant.metadata);
+                        if (meta.language) setTileLanguage(participant.identity, meta.language);
+                    } catch (e) {
+                    }
+                }
+
+                participant.on(RoomEvent.TrackPublished, (publication) => {
+                    
+                    console.log("published", publication.trackSid, publication);
+                });
+
+                participant.on(RoomEvent.TrackSubscribed, (track, publication) => {
+                    if (track.kind === Track.Kind.Audio) {
+                        const langHint = (publication && publication.metadata) ? publication.metadata : null;
+                        if (typeof langHint === 'string') {
+                            try {
+                                const parsed = JSON.parse(langHint);
+                                if (parsed && parsed.lang) {
+                                    setTileLanguage(participant.identity, parsed.lang);
+                                }
+                            } catch (e) {
+                            }
+                        }
+
+                        attachAudioTrack(track, participant.identity);
+                    }
+                });
+
+                for (const pub of participant.audioTracks.values()) {
+                    if (pub.track) {
+                        attachAudioTrack(pub.track, participant.identity);
+                    } else {
+                        participant.subscribe(pub).catch(() => { });
+                    }
+                }
+            }
+
+            function onParticipantDisconnected(participant) {
+                participants.delete(participant.identity);
+                removeParticipantListEntry(participant.identity);
+                removeTile(participant.identity);
+                
+                const audioEl = document.getElementById("audio-" + btoa(participant.identity).replace(/=/g, ''));
+                if (audioEl) audioEl.remove();
+            }
+
+            
+            document.getElementById("joinBtn").addEventListener("click", async () => {
+                
+                ensureAudioContext();
+                if (!joined) {
+                    await joinCall();
+                } else {
+                    alert("Already joined");
+                }
             });
 
-            resetPending(peerId);
-
-            if (localStream) localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
-            pc.ontrack = (event) => {
-    let audio = document.getElementById("audio-" + peerId);
-    if (!audio) {
-        audio = document.createElement("audio");
-        audio.id = "audio-" + peerId;
-        audio.autoplay = true;
-        audio.playsInline = true;
-        audio.muted = false; // make sure remote audio is audible
-        document.body.appendChild(audio);
-        audio.play().catch(e => console.warn("Autoplay blocked", e));
-    }
-    audio.srcObject = event.streams[0];
-
-    const el = document.getElementById(peerSlotMap.get(peerId));
-    if (!el) return;
-
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(event.streams[0]);
-    source.connect(analyser);
-    analyser.fftSize = 256;
-
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-    const detectSpeaking = () => {
-        analyser.getByteFrequencyData(dataArray);
-        const volume = dataArray.reduce((a, b) => a + b, 0);
-        el.classList.toggle("speaking", volume > 50);
-        requestAnimationFrame(detectSpeaking);
-    };
-    detectSpeaking();
-};
-
-            pc.onicecandidate = (event) => {
-                if (event.candidate) {
-                    ws?.send(JSON.stringify({
-                        type: "ice-candidate",
-                        to: peerId,
-                        data: event.candidate
-                    }));
+            document.getElementById("muteBtn").addEventListener("click", () => {
+                if (localAudioTrack) {
+                    localAudioTrack.setMuted(true);
+                    document.getElementById('status').innerText = "Muted";
                 }
-            };
-
-            pc.onconnectionstatechange = () => {
-                console.log("PC connectionState for", peerId, "=", pc.connectionState);
-                if (pc.connectionState === "failed" || pc.connectionState === "disconnected" || pc.connectionState === "closed") {
-                    closePeer(peerId);
+            });
+            document.getElementById("unmuteBtn").addEventListener("click", () => {
+                if (localAudioTrack) {
+                    localAudioTrack.setMuted(false);
+                    document.getElementById('status').innerText = "Unmuted";
                 }
-            };
+            });
 
-            pc.onsignalingstatechange = () => {
-                console.log("PC signalingState for", peerId, "=", pc.signalingState);
-            };
-            pc.oniceconnectionstatechange = () => {
-                console.log("PC iceConnectionState for", peerId, "=", pc.iceConnectionState);
-            };
-
-            peers.set(peerId, pc);
-            return pc;
-        }
-
-        /***** WebSocket / signaling *****/
-        async function startWebSocket() {
-            ws = new WebSocket(WS_URL);
-
-            ws.onopen = () => {
-                document.getElementById("status").innerText = "Connected";
-                assignSlot(USER, `You (${USER})`);
-                console.log("WebSocket connected");
-            };
-
-            ws.onmessage = async (ev) => {
-                let msg;
-                try {
-                    msg = JSON.parse(ev.data);
-                } catch (e) {
-                    console.warn("Failed to parse WS message", e, ev.data);
-                    return;
+            document.getElementById("leaveBtn").addEventListener("click", async () => {
+                if (room) {
+                    try { room.disconnect(); } catch (e) { }
+                    room = null;
+                    joined = false;
+                    document.getElementById('status').innerText = "Left";
                 }
+                
+                const redirect = (typeof FRONTEND_URL !== 'undefined') ? FRONTEND_URL : "/";
+                
+            });
 
-                console.log("WS RX:", msg.type, "from", msg.from || msg.user_id || "(server)");
+            document.getElementById("sendChatBtn").addEventListener("click", async () => {
+                const input = document.getElementById("chatInput");
+                const text = input.value.trim();
+                if (!text || !room) return;
+                const payload = JSON.stringify({ type: "chat", from: USER, text });
+                
+                room.localParticipant.publishData(new TextEncoder().encode(payload), lk.DataPacket_Kind.RELIABLE);
+                addChatMessage(USER, text, true);
+                input.value = "";
+            });
 
-                if (msg.type === "chat") {
-                    addChatMessage(msg.from, msg.text, msg.from === USER);
-                    return;
-                }
-
-                if (msg.type === "peers") {
-                    await new Promise(r => setTimeout(r, 50));
-                    for (const peer of msg.peers) {
-                        const peerId = peer.user_id;
-                        assignSlot(peerId, peer.name || peerId);
-                        const pc = await createPeerConnection(peerId);
-
-                        if (shouldInitiateWith(peerId)) {
-                            try {
-                                const offer = await pc.createOffer();
-                                await pc.setLocalDescription(offer);
-                                ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
-                                console.log("Sent offer to", peerId);
-                            } catch (e) {
-                                console.warn("Failed to create/send offer to", peerId, e);
-                            }
-                        } else {
-                            console.log("Waiting for offer from", peerId);
-                        }
-                    }
-                    return;
-                }
-
-                if (msg.type === "peer-joined") {
-                    const peerId = msg.user_id;
-                    assignSlot(peerId, msg.name || peerId);
-                    const pc = await createPeerConnection(peerId);
-                    if (shouldInitiateWith(peerId)) {
-                        try {
-                            const offer = await pc.createOffer();
-                            await pc.setLocalDescription(offer);
-                            ws.send(JSON.stringify({ type: "offer", to: peerId, data: offer }));
-                            console.log("Sent offer (peer-joined) to", peerId);
-                        } catch (e) {
-                            console.warn("Failed to create/send offer on peer-joined", e);
-                        }
-                    } else {
-                        console.log("peer-joined: waiting for offer from", peerId);
-                    }
-                    return;
-                }
-
-                if (msg.type === "offer") {
-                    const peerId = msg.from;
-                    assignSlot(peerId, msg.name || peerId);
-
-                    if (peers.has(peerId)) {
-                        const existing = peers.get(peerId);
-                        if (existing.signalingState !== "stable") {
-                            console.warn("Existing PC not stable on incoming offer — restarting pc for", peerId, existing.signalingState);
-                            closePeer(peerId);
-                        }
-                    }
-
-                    const pc = await createPeerConnection(peerId);
-                    try {
-                        await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-                    } catch (e) {
-                        console.warn("setRemoteDescription(offer) failed for", peerId, e);
-                        return;
-                    }
             
-                    remoteDescReady.set(peerId, true);
-                    flushCandidates(peerId, pc);
+            window.__lk_room = () => room;
 
-                    try {
-                        const answer = await pc.createAnswer();
-                        await pc.setLocalDescription(answer);
-                        ws.send(JSON.stringify({ type: "answer", to: peerId, data: answer }));
-                        console.log("Sent answer to", peerId);
-                    } catch (e) {
-                        console.warn("Failed to create/send answer to", peerId, e);
-                    }
-                    return;
-                }
+            
+            document.getElementById('status').innerText = "Ready — click Join Call to start";
+            
+            if (preferredLanguage) document.getElementById('myLang').innerText = preferredLanguage;
 
-                if (msg.type === "answer") {
-                    const peerId = msg.from;
-                    console.log("RX answer from", peerId);
-                    const pc = peers.get(peerId);
-                    if (!pc) {
-                        console.warn("Received answer for unknown PC from", peerId);
-                        return;
-                    }
-
-                    const state = pc.signalingState;
-                    console.log("pc.signalingState before answer:", state);
-                    if (state === "have-local-offer" || state === "have-local-pranswer") {
-                        try {
-                            if (!pc.currentRemoteDescription || Object.keys(pc.currentRemoteDescription).length === 0) {
-                                await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-                                remoteDescReady.set(peerId, true);
-                                flushCandidates(peerId, pc);
-                                console.log("Applied remote answer for", peerId);
-                            } else {
-                                console.log("Skipping answer application: remoteDescription already present for", peerId);
-                            }
-                        } catch (e) {
-                            console.warn("setRemoteDescription(answer) failed for", peerId, e);
-                        }
-                    } else {
-                        console.warn("Ignoring answer from", peerId, "because signalingState is", state);
-                    }
-                    return;
-                }
-
-                if (msg.type === "ice-candidate") {
-                    const peerId = msg.from;
-                    const pc = peers.get(peerId);
-                    const candidate = new RTCIceCandidate(msg.data);
-                    if (pc && remoteDescReady.get(peerId)) {
-                        try {
-                            await pc.addIceCandidate(candidate);
-                        } catch (e) {
-                            console.warn("addIceCandidate error", e);
-                        }
-                    } else {
-                        addCandidateToQueue(peerId, candidate);
-                    }
-                    return;
-                }
-
-                if (msg.type === "peer-left") {
-                    closePeer(msg.user_id);
-                    return;
-                }
-
-                console.warn("Unknown WS message type:", msg.type);
-            };
-
-            ws.onclose = () => {
-                document.getElementById("status").innerText = "Disconnected";
-                console.log("WebSocket closed");
-            };
-            ws.onerror = (e) => {
-                console.warn("WebSocket error", e);
-            };
-        }
-
-        /***** Controls *****/
-        document.getElementById("muteBtn").onclick = () => {
-            localStream?.getAudioTracks().forEach(t => t.enabled = false);
-            document.getElementById("status").innerText = "Muted";
-        };
-        document.getElementById("unmuteBtn").onclick = () => {
-            localStream?.getAudioTracks().forEach(t => t.enabled = true);
-            document.getElementById("status").innerText = "Unmuted";
-        };
-        document.getElementById("leaveBtn").onclick = async () => {
-            try {
-                await fetch(BACKEND_HTTP + "/leave_room", {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ user_id: USER, room_code: ROOM })
-                });
-            } catch (e) {
-                console.warn("leave_room failed", e);
-            } finally {
-                ws?.close();
-                localStream?.getTracks().forEach(t => t.stop());
-                if (FRONTEND_URL) { window.location.href = FRONTEND_URL; } else { window.location.href = "/"; }
-            }
-        };
-        document.getElementById("sendBtn").onclick = () => {
-            const input = document.getElementById("chatInput");
-            const text = input.value.trim();
-            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: "chat", text: text }));
-            addChatMessage(USER, text, true);
-            input.value = "";
-        };
-
-        /***** Safety & logging *****/
-        window.addEventListener("unhandledrejection", (ev) => {
-            console.warn("UnhandledPromiseRejection:", ev.reason);
-        });
-
-        /***** Start up *****/
-        (async () => {
-            await initLocalMedia();
-            await startWebSocket();
         })();
     </script>
 </body>
+
 </html>
 """
 
 @app.get("/room", response_class=HTMLResponse)
 async def room_page(room_code: str, user_id: str):
     room = rooms.get(room_code)
-    if not room or user_id not in users or user_id not in room["members"]:
+    if not room or user_id not in [m["user_id"] for m in room["members"]]:
         return HTMLResponse("<h2>Invalid room or user. Please (re)join from the app.</h2>", status_code=400)
     page = ROOM_HTML.replace("{{FRONTEND_URL_JSON}}", json_dumps(FRONTEND_URL))
     return HTMLResponse(page)
+
 
 def json_dumps(x: str) -> str:
     import json as _json
