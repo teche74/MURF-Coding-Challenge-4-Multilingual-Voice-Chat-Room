@@ -27,8 +27,7 @@ except Exception:
     AccessToken = None
     VideoGrants = None
 
-from backend.speech_to_text_and_translation_utils import speech_to_text, translate_text
-from backend.murf_api import generate_speech_from_text
+from backend.murf_pipeline import run_pipeline
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -213,25 +212,14 @@ async def auth_callback(request: Request):
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...), target_lang: str = "en"):
     audio_bytes = await file.read()
-    try:
-        recognized_text = await asyncio.to_thread(speech_to_text, audio_bytes)
-    except Exception as e:
-        logger.warning(f"Speech-to-text failed: {e}")
-        recognized_text = ""
-    if not recognized_text:
-        recognized_text = ""
-    try:
-        translated_text = await asyncio.to_thread(translate_text, recognized_text, target_lang)
-    except Exception:
-        translated_text = recognized_text
-    try:
-        tts_audio = await synthesize_with_cache(translated_text, target_lang)
-    except Exception as e:
-        logger.warning(f"TTS generation failed: {e}")
-        tts_audio = b""
-    tts_base64 = base64.b64encode(tts_audio).decode("utf-8")
-    return {"text": translated_text, "tts_audio_base64": tts_base64}
+    recognized, translated, tts_audio = await run_pipeline(audio_bytes, stt_lang="en-US", target_lang=target_lang)
 
+    tts_base64 = base64.b64encode(tts_audio or b"").decode("utf-8")
+    return {
+        "recognized_text": recognized,
+        "translated_text": translated,
+        "tts_audio_base64": tts_base64,
+    }
 
 @app.post("/livekit/join-token")
 def livekit_join_token(req: LiveKitJoinTokenReq):
@@ -1247,19 +1235,25 @@ async def ws_translate(ws: WebSocket):
 async def _translate_and_tts(ws: WebSocket, text: str, target_lang: str,
                              voice: str, speaker_id: str, from_lang: str):
     try:
-        translated = await asyncio.to_thread(translate_text, text, target_lang)
-    except Exception:
-        translated = text
+        _, translated, audio_bytes = await run_pipeline(text.encode(), stt_lang=from_lang, target_lang=target_lang, voice=voice)
 
-    try:
-        audio_bytes = await synthesize_with_cache(translated, target_lang, voice=voice)
-        await ws.send_text(json.dumps({
-            "type": "audio",
-            "speakerId": speaker_id,
-            "fromLang": from_lang,
-            "targetLang": target_lang,
-            "mime": "audio/mpeg",
-            "b64": base64.b64encode(audio_bytes).decode("utf-8")
-        }))
+        if translated:
+            await ws.send_text(json.dumps({
+                "type": "finalText",
+                "speakerId": speaker_id,
+                "fromLang": from_lang,
+                "targetLang": target_lang,
+                "text": translated
+            }))
+        
+        if audio_bytes:
+            await ws.send_text(json.dumps({
+                "type": "audio",
+                "speakerId": speaker_id,
+                "fromLang": from_lang,
+                "targetLang": target_lang,
+                "mime": "audio/mpeg",
+                "b64": base64.b64encode(audio_bytes).decode("utf-8")
+            }))
     except Exception as e:
-        logging.warning(f"TTS failed: {e}")
+        logging.warning(f"Murf pipeline failed: {e}")
