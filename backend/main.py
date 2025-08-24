@@ -37,7 +37,7 @@ load_dotenv(env_path)
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://chatfree.streamlit.app")
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://murf-coding-challenge-4-multilingual.onrender.com")
 oauth = OAuth()
 if CLIENT_ID and CLIENT_SECRET:
     oauth.register(
