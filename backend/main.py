@@ -37,7 +37,7 @@ load_dotenv(env_path)
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://chatfree.streamlit.app")
-
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 oauth = OAuth()
 if CLIENT_ID and CLIENT_SECRET:
     oauth.register(
@@ -262,7 +262,7 @@ ROOM_HTML = """
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>LiveKit Multilingual Voice Room</title>
+    <title>Multilingual Voice Room</title>
     <style>
         :root {
             --bg1: #0f2027;
@@ -469,6 +469,8 @@ ROOM_HTML = """
     </div>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <script type="module">
+        const BACKEND_URL = "{{BACKEND_URL}}"; 
+        const FRONTEND_URL = {{FRONTEND_URL_JSON}};
         (async () => {
             const qs = new URLSearchParams(location.search);
             const ROOM = qs.get("room_code") || "";
@@ -476,7 +478,7 @@ ROOM_HTML = """
             const MY_LANG = qs.get("lang") || ""; 
             document.getElementById('roomName').innerText = ROOM || "[unknown]";
 
-            const TOKEN_ENDPOINT = "/livekit/join-token";
+            const TOKEN_ENDPOINT = BACKEND_URL + "/livekit/join-token";
 
             let lk;
             try {
@@ -831,7 +833,9 @@ async def room_page(room_code: str, user_id: str):
     room = rooms.get(room_code)
     if not room or user_id not in [m["user_id"] for m in room["members"]]:
         return HTMLResponse("<h2>Invalid room or user. Please (re)join from the app.</h2>", status_code=400)
-    page = ROOM_HTML.replace("{{FRONTEND_URL_JSON}}", json_dumps(FRONTEND_URL))
+    page = ROOM_HTML
+    page = page.replace("{{BACKEND_URL}}", BACKEND_URL)
+    page = page.replace("{{FRONTEND_URL_JSON}}", json_dumps(FRONTEND_URL))
     return HTMLResponse(page)
 
 
