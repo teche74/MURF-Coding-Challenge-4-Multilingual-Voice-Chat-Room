@@ -13,16 +13,10 @@ def fft_bars_from_pcm16(audio_bytes: bytes, sample_rate: int = 16000, bands: int
     x = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
     if x.size == 0:
         return [0.0] * bands
-
-    # Window to reduce spectral leakage
     w = np.hanning(x.size)
     X = np.fft.rfft(x * w)
     mag = np.abs(X)
-
-    # Frequency bins (rfft)
     freqs = np.fft.rfftfreq(x.size, d=1.0 / sample_rate)
-
-    # Voice-ish range and log-like band edges
     lo, hi = 80, min(8000, sample_rate // 2)
     edges = np.geomspace(max(1, lo), max(lo + 1, hi), bands + 1)
 
@@ -34,8 +28,6 @@ def fft_bars_from_pcm16(audio_bytes: bytes, sample_rate: int = 16000, bands: int
         idx = np.where((freqs >= f0) & (freqs < f1))[0]
         band_val = float(np.sqrt(np.mean((mag[idx] if idx.size else [0.0]) ** 2)))
         out.append(band_val / total_max)
-
-    # Smooth-ish curve, cap to 1
     out = [min(1.0, v ** 0.8) for v in out]
     return out
 

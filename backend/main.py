@@ -26,8 +26,6 @@ load_dotenv(env_path)
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://chatfree.streamlit.app")
-
-# --- oauth ---
 oauth = OAuth()
 oauth.register(
     name='google',
@@ -37,24 +35,16 @@ oauth.register(
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={'scope': 'email openid'}
 )
-
-# --- in-memory stores (consider Redis later) ---
 users: Dict[str, Dict] = {}
 rooms: Dict[str, Dict] = {}
 MAX_ROOM_CAPACITY = 4
-
-# TTS cache
 TTS_CACHE: Dict[Tuple[str, str, str], Tuple[bytes, float]] = {}
 CACHE_TTL_SECONDS = 60 * 5
-
-# --- app ---
 app = FastAPI(title="Multilingual Chat Room")
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY", "super-secret"))
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
-
-# --- helpers ---
 def generate_room_code(length: int = 6) -> str:
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
@@ -76,8 +66,6 @@ async def synthesize_with_cache(text: str, target_lang: str, voice: str="default
     audio_bytes = await asyncio.to_thread(generate_speech_from_text, text, target_lang, voice)
     TTS_CACHE[key] = (audio_bytes, now)
     return audio_bytes
-
-# --- models ---
 class CreateRoomRequest(BaseModel):
     user_id: str
     public: bool = True
@@ -89,8 +77,6 @@ class JoinRoomRequest(BaseModel):
 class LeaveRoomRequest(BaseModel):
     user_id: str
     room_code: str
-
-# --- basic APIs ---
 @app.get("/room_info")
 def room_info(room_code: str):
     room = rooms.get(room_code)
@@ -137,8 +123,6 @@ def leave_room(req: LeaveRoomRequest):
         room["members"].remove(req.user_id)
         logger.info(f"user {req.user_id} left room {req.room_code} via API")
     return {"status": "success"}
-
-# --- auth ---
 @app.get("/login/google")
 async def login_google(request: Request):
     redirect_uri = request.url_for('auth_callback')
@@ -159,8 +143,6 @@ async def auth_callback(request: Request):
     users[user_email] = {"name": user_email.split('@')[0], "language": "en"}
     frontend_url = f"{FRONTEND_URL}/?user_id={quote(user_email)}&name={quote(users[user_email]['name'])}"
     return RedirectResponse(frontend_url)
-
-# --- STT/TTS ---
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...), target_lang: str = "en"):
     audio_bytes = await file.read()
@@ -182,8 +164,6 @@ async def transcribe_audio(file: UploadFile = File(...), target_lang: str = "en"
         tts_audio = b""
     tts_base64 = base64.b64encode(tts_audio).decode("utf-8")
     return {"text": translated_text, "tts_audio_base64": tts_base64}
-
-# --- WebSocket room manager ---
 class WSRoomManager:
     def __init__(self):
         self.rooms_ws: Dict[str, Dict[str, WebSocket]] = {}
@@ -320,8 +300,6 @@ async def ws_endpoint(websocket: WebSocket):
                 logger.info(f"Removed {user_id} from room {room_code} after websocket close")
             except Exception:
                 pass
-
-# --- NEW: serve the room UI outside Streamlit (full mic permission) ---
 ROOM_HTML = """
 <!DOCTYPE html>
 <html lang="en">
