@@ -486,7 +486,8 @@ ROOM_HTML = """
                 document.getElementById('status').innerText = "Failed to load LiveKit client. Check network.";
                 return;
             }
-            const { connect, RoomEvent, Track, createLocalTracks } = lk;
+
+            const { Room, RoomEvent, Track, createLocalTracks, DataPacket_Kind } = lk;
 
             let room = null;
             let localAudioTrack = null;
@@ -648,7 +649,8 @@ ROOM_HTML = """
                 document.getElementById('status').innerText = "Connecting to LiveKit...";
 
                 try {
-                    room = await connect(livekitUrl, token, { name: USER });
+                    room = new Room();
+                    await room.connect(livekitUrl, token, { name: USER });
                 } catch (e) {
                     console.error("LiveKit connect failed", e);
                     document.getElementById('status').innerText = "LiveKit connect failed";
@@ -806,19 +808,17 @@ ROOM_HTML = """
                 if (!text || !room) return;
                 const payload = JSON.stringify({ type: "chat", from: USER, text });
                 
-                room.localParticipant.publishData(new TextEncoder().encode(payload), lk.DataPacket_Kind.RELIABLE);
+                room.localParticipant.publishData(new TextEncoder().encode(payload), DataPacket_Kind.RELIABLE);
                 addChatMessage(USER, text, true);
                 input.value = "";
             });
 
             
             window.__lk_room = () => room;
-
             
             document.getElementById('status').innerText = "Ready — click Join Call to start";
-            
-            if (preferredLanguage) document.getElementById('myLang').innerText = preferredLanguage;
 
+            if (preferredLanguage) document.getElementById('myLang').innerText = preferredLanguage;
         })();
     </script>
 </body>
