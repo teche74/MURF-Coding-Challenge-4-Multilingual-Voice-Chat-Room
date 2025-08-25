@@ -131,12 +131,19 @@ class TranslatorAgent(Agent):
 
     async def on_enter(self):
         logger.info("[agent] joined session")
-        # announce presence (best-effort)
         try:
-            await self.session.say("Translator bot has joined the room.")
+            tts_blob = await asyncio.to_thread(
+                generate_speech_from_text,
+                "Translator bot has joined the room.",
+                language="en-US",
+                voice="en-US-Wavenet-D"
+            )
+            if tts_blob:
+                audio_iter = _bytes_to_audio_frames_async(tts_blob, sample_rate=44100, channels=1, frame_ms=FRAME_MS)
+                await self.session.say("", audio=audio_iter)
         except Exception:
             logger.exception("[agent] failed to announce on enter")
-
+    
     async def set_user_pref(self, user_id: str, language: str, voice: Optional[str] = None):
         if not language:
             language = "en-US"
