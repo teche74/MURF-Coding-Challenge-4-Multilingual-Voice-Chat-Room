@@ -155,6 +155,12 @@ def translate_text_murf(text, target_language="es-ES"):
 # -----------------------
 # Text to Speech (Murf)
 # -----------------------
+import base64
+import logging
+import requests
+
+logger = logging.getLogger("murf_pipeline")
+
 def generate_speech_from_text(text, language="en-US", voice=None):
     if not voice:
         voice = get_default_voice(language)
@@ -167,26 +173,38 @@ def generate_speech_from_text(text, language="en-US", voice=None):
         sample_rate=44100.0,
     )
 
-    # Case 1: Murf returns raw bytes
+    # Case 1: Murf returns raw bytes directly
     if isinstance(response, (bytes, bytearray)):
         return bytes(response)
 
-    # Case 2: Murf returns dict (JSON-like)
+    # Case 2: Murf returns dict with inline base64
     if isinstance(response, dict):
         if "audio" in response:
             audio_obj = response["audio"]
             if isinstance(audio_obj, dict) and "data" in audio_obj:
-                import base64
                 return base64.b64decode(audio_obj["data"])
 
-    # Case 3: Murf returns object with attributes
-    for attr in ("content", "audio", "audio_bytes", "data"):
+    # Case 3: Murf returns object with attributes (SDK style)
+    for attr in ("content", "audio", "audio_bytes", "data", "encoded_audio"):
         if hasattr(response, attr):
             blob = getattr(response, attr)
-            if isinstance(blob, (bytes, bytearray)):
-                return bytes(blob)
+            if blob:
+                if isinstance(blob, (bytes, bytearray)):
+                    return bytes(blob)
+                if isinstance(blob, str):  # base64 encoded string
+                    try:
+                        return base64.b64decode(blob)
+                    except Exception:
+                        pass
 
-    # Debug fallback
+    # Case 4: Murf returns signed audio file URL
+    if hasattr(response, "audio_file") and response.audio_file:
+        logger.info("Downloading Murf audio from URL: %s", response.audio_file)
+        r = requests.get(response.audio_file, timeout=10)
+        r.raise_for_status()
+        return r.content
+
+    # If nothing matched
     logger.error("Unsupported Murf TTS response: %s", response)
     raise RuntimeError("Unsupported Murf TTS response shape")
 
