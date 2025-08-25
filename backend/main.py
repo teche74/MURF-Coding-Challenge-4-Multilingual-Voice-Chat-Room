@@ -256,7 +256,7 @@ async def _reconcile_bots(room_code: str):
     unique_langs = sorted(set(member_langs))
 
     if len(unique_langs) <= 1:
-        await stop_room_bot(room_code, room["bots"])
+        await stop_room_bot(room_code)
         room["bots"].clear()
         return
 
