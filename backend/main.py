@@ -141,7 +141,7 @@ def create_room(req: CreateRoomRequest):
     return {"status": "success", "room_code": code}
 
 @app.post("/join_room")
-def join_room(req: JoinRoomRequest):
+async def join_room(req: JoinRoomRequest):
     _ensure_user(req.user_id, req.language, req.voice)
     if req.room_code:
         room = rooms.get(req.room_code)
@@ -164,7 +164,7 @@ def join_room(req: JoinRoomRequest):
     return {"status": "success", "room_code": pick}
 
 @app.post("/leave_room")
-def leave_room(req: LeaveRoomRequest):
+async def leave_room(req: LeaveRoomRequest):
     room = rooms.get(req.room_code)
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -210,7 +210,7 @@ async def auth_callback(request: Request):
 
 
 @app.post("/livekit/join-token")
-def livekit_join_token(req: LiveKitJoinTokenReq):
+async def livekit_join_token(req: LiveKitJoinTokenReq):
     if not (LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL):
         raise HTTPException(500, "LiveKit not configured")
     if AccessToken is None or VideoGrants is None:
