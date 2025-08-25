@@ -8,13 +8,11 @@ from pydantic import BaseModel
 from authlib.integrations.starlette_client import OAuth
 from urllib.parse import quote
 from dotenv import load_dotenv
-from .bot_worker import ensure_translation_bot_for_language, stop_all_bots_for_room
+from backend.bot_worker import (
+    ensure_translation_bot_for_language,
+    stop_all_bots_for_room,
+)
 
-try:
-    from livekit.api import AccessToken, VideoGrants
-except Exception:
-    AccessToken = None
-    VideoGrants = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,6 +29,12 @@ BACKEND_URL = os.getenv("BACKEND_URL", "https://murf-coding-challenge-4-multilin
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
+
+try:
+    from livekit.api import AccessToken, VideoGrants
+except Exception:
+    AccessToken = None
+    VideoGrants = None
 
 if not (LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL):
     logger.warning("LiveKit credentials not set. Set LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL in .env")
@@ -50,7 +54,7 @@ if CLIENT_ID and CLIENT_SECRET:
 
 users: Dict[str, Dict] = {}
 rooms: Dict[str, Dict] = {}
-MAX_ROOM_CAPACITY = 8
+MAX_ROOM_CAPACITY = 4
 
 # room shape: {
 #   code: {
@@ -80,24 +84,26 @@ def _room_code(n: int = 6) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=n))
 
 
-def _ensure_user(user_id: str, language: str = "en"):
+def _ensure_user(user_id: str, language: str = "en", voice: str = "default"):
     if user_id not in users:
         name = (user_id.split("@")[0] if "@" in user_id else user_id)[:32]
-        users[user_id] = {"name": name, "language": language}
+        users[user_id] = {"name": name, "language": language, "voice": voice}
     else:
         users[user_id]["language"] = language or users[user_id].get("language", "en")
-
+        users[user_id]["voice"] = voice or users[user_id].get("voice", "default")
 
 class CreateRoomRequest(BaseModel):
     user_id: str
     public: bool = True
     language: Optional[str] = "en"
+    voice: Optional[str] = "default"
 
 
 class JoinRoomRequest(BaseModel):
     user_id: str
     room_code: Optional[str] = None
     language: Optional[str] = "en"
+    voice: Optional[str] = "default"
 
 
 class LeaveRoomRequest(BaseModel):
@@ -110,6 +116,7 @@ class LiveKitJoinTokenReq(BaseModel):
     user_id: str
     name: Optional[str] = None
     language: Optional[str] = "en"
+    voice: Optional[str] = "default"
 
 
 with open(os.path.join(BASE_DIR, "templates", "room.html"), "r", encoding="utf-8") as f:
@@ -128,6 +135,59 @@ def room_page(room_code: str, user_id: str, lang: Optional[str] = None):
         "{{FRONTEND_URL}}", FRONTEND_URL
     )
     return HTMLResponse(page)
+
+@app.post("/create_room")
+def create_room(req: CreateRoomRequest):
+    _ensure_user(req.user_id, req.language, req.voice)
+    code = _room_code()
+    rooms[code] = {
+        "public": req.public,
+        "members": [{"user_id": req.user_id, "language": req.language or "en"}],
+        "bots": {},
+    }
+    logger.info("room created %s by %s", code, req.user_id)
+    return {"status": "success", "room_code": code}
+
+@app.post("/join_room")
+def join_room(req: JoinRoomRequest):
+    _ensure_user(req.user_id, req.language, req.voice)
+    if req.room_code:
+        room = rooms.get(req.room_code)
+        if not room:
+            raise HTTPException(status_code=400, detail="Room not found")
+        if len(room["members"]) >= MAX_ROOM_CAPACITY:
+            raise HTTPException(status_code=400, detail="Room full")
+        if not any(m["user_id"] == req.user_id for m in room["members"]):
+            room["members"].append({"user_id": req.user_id, "language": req.language, "voice": req.voice})
+        asyncio.create_task(_reconcile_bots(req.room_code))
+        return {"status": "success", "room_code": req.room_code}
+
+    public = [code for code, r in rooms.items() if r["public"] and len(r["members"]) < MAX_ROOM_CAPACITY]
+    if not public:
+        raise HTTPException(status_code=400, detail="No public rooms available")
+    pick = random.choice(public)
+    if not any(m["user_id"] == req.user_id for m in rooms[pick]["members"]):
+        rooms[pick]["members"].append({"user_id": req.user_id, "language": req.language, "voice": req.voice})
+    asyncio.create_task(_reconcile_bots(pick))
+    return {"status": "success", "room_code": pick}
+
+@app.post("/leave_room")
+def leave_room(req: LeaveRoomRequest):
+    room = rooms.get(req.room_code)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    room["members"] = [m for m in room["members"] if m["user_id"] != req.user_id]
+    logger.info("User %s left room %s", req.user_id, req.room_code)
+    asyncio.create_task(_reconcile_bots(req.room_code))
+    return {"status": "success"}
+
+
+@app.get("/room_info")
+def room_info(room_code: str):
+    room = rooms.get(room_code)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    return {"members": room["members"], "bots": list(room["bots"].keys())}
 
 
 @app.get("/login/google")
@@ -157,133 +217,49 @@ async def auth_callback(request: Request):
     return RedirectResponse(frontend_url)
 
 
-@app.post("/create_room")
-def create_room(req: CreateRoomRequest):
-    _ensure_user(req.user_id, req.language or "en")
-    code = _room_code()
-    rooms[code] = {
-        "public": req.public,
-        "members": [{"user_id": req.user_id, "language": req.language or "en"}],
-        "bots": {},
-    }
-    log.info("room created %s by %s", code, req.user_id)
-    return {"status": "success", "room_code": code}
-
-
-@app.post("/join_room")
-def join_room(req: JoinRoomRequest):
-    _ensure_user(req.user_id, req.language or "en")
-
-    if req.room_code:
-        room = rooms.get(req.room_code)
-        if not room:
-            raise HTTPException(status_code=400, detail="Room not found")
-        if len(room["members"]) >= MAX_ROOM_CAPACITY:
-            raise HTTPException(status_code=400, detail="Room full")
-        if not any(m["user_id"] == req.user_id for m in room["members"]):
-            room["members"].append(
-                {"user_id": req.user_id, "language": req.language or "en"}
-            )
-        asyncio.create_task(_reconcile_bots(req.room_code))
-        return {"status": "success", "room_code": req.room_code}
-
-    public = [
-        code
-        for code, r in rooms.items()
-        if r["public"] and len(r["members"]) < MAX_ROOM_CAPACITY
-    ]
-    if not public:
-        raise HTTPException(status_code=400, detail="No public rooms available")
-    pick = random.choice(public)
-    if not any(m["user_id"] == req.user_id for m in rooms[pick]["members"]):
-        rooms[pick]["members"].append(
-            {"user_id": req.user_id, "language": req.language or "en"}
-        )
-    asyncio.create_task(_reconcile_bots(pick))
-    return {"status": "success", "room_code": pick}
-
-
-@app.post("/leave_room")
-def leave_room(req: LeaveRoomRequest):
-    room = rooms.get(req.room_code)
-    if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
-    room["members"] = [m for m in room["members"] if m["user_id"] != req.user_id]
-    log.info("user %s left room %s", req.user_id, req.room_code)
-
-    asyncio.create_task(_reconcile_bots(req.room_code))
-    return {"status": "success"}
-
-
-@app.get("/room_info")
-def room_info(room_code: str):
-    room = rooms.get(room_code)
-    if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
-    return {"members": room["members"], "bots": list(room["bots"].keys())}
-
-
 @app.post("/livekit/join-token")
 def livekit_join_token(req: LiveKitJoinTokenReq):
     if not (LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL):
-        raise HTTPException(500, "LiveKit is not configured.")
+        raise HTTPException(500, "LiveKit not configured")
     if AccessToken is None or VideoGrants is None:
-        raise HTTPException(
-            500, "LiveKit server SDK not available (pip install livekit-api)."
-        )
+        raise HTTPException(500, "LiveKit server SDK missing")
 
-    room = rooms.get(req.room_code)
-    if not room:
-        rooms[req.room_code] = {"public": True, "members": [], "bots": {}}
-        room = rooms[req.room_code]
+    _ensure_user(req.user_id, req.language, req.voice)
+    room = rooms.setdefault(req.room_code, {"public": True, "members": [], "bots": {}})
     found = next((m for m in room["members"] if m["user_id"] == req.user_id), None)
     if not found:
-        room["members"].append(
-            {"user_id": req.user_id, "language": req.language or "en"}
-        )
+        room["members"].append({"user_id": req.user_id, "language": req.language, "voice": req.voice})
     else:
-        found["language"] = req.language or found.get("language", "en")
+        found["language"] = req.language
+        found["voice"] = req.voice
 
     asyncio.create_task(_reconcile_bots(req.room_code))
 
     try:
-        meta = json.dumps({"language": req.language or "en"})
+        meta = json.dumps({"language": req.language, "voice": req.voice})
         at = (
             AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
             .with_identity(req.user_id)
             .with_name(req.name or req.user_id)
-            .with_grants(
-                VideoGrants(
-                    room_join=True,
-                    room=req.room_code,
-                    can_publish=True,
-                    can_subscribe=True,
-                    can_publish_data=True,
-                )
-            )
+            .with_grants(VideoGrants(room_join=True, room=req.room_code, can_publish=True, can_subscribe=True, can_publish_data=True))
         )
         if hasattr(at, "with_metadata"):
             at = at.with_metadata(meta)
         token_jwt = at.to_jwt()
     except Exception as e:
-        log.exception("Failed to mint token")
+        logger.exception("Failed to mint token")
         raise HTTPException(500, f"Token generation failed: {e}")
 
     return {"token": token_jwt, "url": LIVEKIT_URL, "room_code": req.room_code}
 
-
 async def _reconcile_bots(room_code: str):
-    """Create/stop bots so there is exactly 0 or 1 bot per language when needed.
-    If all members share the same language → no bots.
-    """
     room = rooms.get(room_code)
     if not room:
         return
     member_langs = [m.get("language", "en") for m in room["members"]]
-    unique_langs = sorted({l for l in member_langs if l})
+    unique_langs = sorted(set(member_langs))
 
     if len(unique_langs) <= 1:
-
         await stop_all_bots_for_room(room_code, room["bots"])
         room["bots"].clear()
         return
