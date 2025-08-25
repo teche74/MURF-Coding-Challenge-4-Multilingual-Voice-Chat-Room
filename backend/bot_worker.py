@@ -1,10 +1,10 @@
 import asyncio
-import json
 import logging
 import contextlib
 import io
 import numpy as np
 from pydub import AudioSegment
+from collections import defaultdict
 
 log = logging.getLogger("bot")
 
@@ -27,8 +27,13 @@ class Bot:
         self.client: rtc.Room | None = None
         self.audio_sources: dict[str, rtc.AudioSource] = {}
         self.local_tracks: dict[str, rtc.LocalAudioTrack] = {}
+
+        # per-user TTS queues + tasks
+        self.playback_queues: dict[str, asyncio.Queue] = defaultdict(asyncio.Queue)
+        self.playback_tasks: dict[str, asyncio.Task] = {}
+
         self.closed = asyncio.Event()
-        self.user_prefs: dict[str, dict] = {}  # {user_id: {"language": str, "voice": str}}
+        self.user_prefs: dict[str, dict] = {}
 
     async def start(self):
         if rtc is None:
@@ -55,78 +60,71 @@ class Bot:
         async for frame in stream:
             pcm_bytes = frame.data
             try:
-                # Step 1: Speech-to-text
-                recognized = await asyncio.to_thread(
-                    lambda: process_audio_pipeline(pcm_bytes, stt_lang="auto")[0]
+                # Run full pipeline once
+                recognized, translated, _ = await asyncio.to_thread(
+                    process_audio_pipeline, pcm_bytes, "auto", None, None
                 )
                 log.debug("bot[%s] recognized='%s'", self.room_code, recognized)
 
-                if not recognized:
+                if not recognized or not self.user_prefs:
                     continue
 
-                if not self.user_prefs:
-                    log.warning("bot[%s] has no user_prefs set, skipping fanout", self.room_code)
-                    continue
-
-                # Collect target languages
-                lang_map: dict[str, list[str]] = {}
                 for uid, pref in self.user_prefs.items():
-                    target_lang = pref.get("language", "en-US")
-                    lang_map.setdefault(target_lang, []).append(uid)
-
-                log.info("bot[%s] fanout languages=%s", self.room_code, list(lang_map.keys()))
-
-                # Step 2: Translate + TTS
-                for target_lang, user_ids in lang_map.items():
-                    translated = await asyncio.to_thread(
-                        lambda: process_audio_pipeline(
-                            pcm_bytes, stt_lang="auto", target_lang=target_lang
-                        )[1]
-                    )
-                    log.debug("bot[%s] translated(%s)='%s'", self.room_code, target_lang, translated)
-
-                    if not translated:
+                    if uid == speaker_id:
                         continue
+                    target_lang = pref.get("language", "en-US")
+                    voice = pref.get("voice", "en-US-Wavenet-A")
 
-                    for uid in user_ids:
-                        voice = self.user_prefs[uid].get("voice", "en-US-Wavenet-A")
-                        _, _, tts_bytes = await asyncio.to_thread(
-                            process_audio_pipeline,
-                            pcm_bytes,
-                            "auto",
-                            target_lang,
-                            voice,
+                    # Run full pipeline for translation+TTS
+                    _, translated, tts_bytes = await asyncio.to_thread(
+                        process_audio_pipeline, pcm_bytes, "auto", target_lang, voice
+                    )
+
+                    if tts_bytes:
+                        log.info(
+                            "bot[%s] queueing TTS for user %s lang=%s voice=%s",
+                            self.room_code, uid, target_lang, voice,
                         )
-                        if tts_bytes:
-                            log.info(
-                                "bot[%s] playing TTS for user %s lang=%s voice=%s",
-                                self.room_code,
-                                uid,
-                                target_lang,
-                                voice,
-                            )
-                            await self._play_tts(uid, tts_bytes)
-                        else:
-                            log.warning("bot[%s] failed TTS for user %s", self.room_code, uid)
+                        await self._play_tts(uid, tts_bytes)
+                    else:
+                        log.warning("bot[%s] failed TTS for user %s", self.room_code, uid)
 
             except Exception as e:
                 log.error("Pipeline error in bot %s: %s", self.room_code, e, exc_info=True)
 
     async def _play_tts(self, user_id: str, tts_bytes: bytes):
+        await self.playback_queues[user_id].put(tts_bytes)
+
+        if user_id not in self.playback_tasks or self.playback_tasks[user_id].done():
+            self.playback_tasks[user_id] = asyncio.create_task(self._process_queue(user_id))
+
+    async def _process_queue(self, user_id: str):
+        """Worker that plays queued TTS sequentially for one user."""
+        while True:
+            try:
+                tts_bytes = await self.playback_queues[user_id].get()
+                await self._play_tts_bytes(user_id, tts_bytes)
+            except Exception as e:
+                log.error("Playback queue error for %s: %s", user_id, e, exc_info=True)
+            finally:
+                self.playback_queues[user_id].task_done()
+
+    async def _play_tts_bytes(self, user_id: str, tts_bytes: bytes):
+        """Actual audio playback logic."""
         log.debug(
-            "bot[%s] preparing TTS playback for user %s (%d bytes)",
-            self.room_code,
-            user_id,
-            len(tts_bytes) if tts_bytes else 0,
+            "bot[%s] playing queued TTS for user %s (%d bytes)",
+            self.room_code, user_id, len(tts_bytes) if tts_bytes else 0,
         )
         try:
-            if user_id not in self.audio_sources:
-                self.audio_sources[user_id] = rtc.AudioSource(48000, 1)
-                self.local_tracks[user_id] = rtc.LocalAudioTrack.create_audio_track(
-                    f"bot_audio_{user_id}", self.audio_sources[user_id]
+            track_name = f"bot_audio_{self.room_code}_{user_id}"
+
+            if track_name not in self.audio_sources:
+                self.audio_sources[track_name] = rtc.AudioSource(48000, 1)
+                self.local_tracks[track_name] = rtc.LocalAudioTrack.create_audio_track(
+                    track_name, self.audio_sources[track_name]
                 )
                 await self.client.local_participant.publish_track(
-                    self.local_tracks[user_id]
+                    self.local_tracks[track_name]
                 )
                 log.info("bot[%s] published new track for %s", self.room_code, user_id)
 
@@ -137,15 +135,13 @@ class Bot:
 
             frame_size = 960
             for i in range(0, len(samples), frame_size):
-                chunk = samples[i : i + frame_size]
+                chunk = samples[i: i + frame_size]
                 if len(chunk) < frame_size:
                     break
                 frame = rtc.AudioFrame(
-                    data=chunk.tobytes(),
-                    sample_rate=48000,
-                    num_channels=1,
+                    data=chunk.tobytes(), sample_rate=48000, num_channels=1,
                 )
-                self.audio_sources[user_id].capture_frame(frame)
+                self.audio_sources[track_name].capture_frame(frame)
                 await asyncio.sleep(0.02)
         except Exception as e:
             log.error("TTS playback failed for %s: %s", user_id, e, exc_info=True)
@@ -154,16 +150,16 @@ class Bot:
         self.user_prefs[user_id] = {"language": language, "voice": voice}
         log.info(
             "bot[%s] set user_pref for %s: language=%s voice=%s",
-            self.room_code,
-            user_id,
-            language,
-            voice,
+            self.room_code, user_id, language, voice,
         )
 
     async def stop(self):
         with contextlib.suppress(Exception):
             if self.client:
                 await self.client.disconnect()
+        # cancel playback workers
+        for task in self.playback_tasks.values():
+            task.cancel()
         self.closed.set()
         log.info("bot[%s] stopped", self.room_code)
 
