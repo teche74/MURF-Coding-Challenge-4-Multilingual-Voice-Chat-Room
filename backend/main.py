@@ -1,25 +1,14 @@
-import json
-import sys
-import os
-import time
-import random
-import string
-import logging
-import asyncio
-import base64
-
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from typing import Dict, Optional, Tuple
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect
+import os, json, time, random, string, asyncio, logging
+from typing import Dict, Optional, List
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse, HTMLResponse
-from fastapi.websockets import WebSocketState
 from pydantic import BaseModel
 from authlib.integrations.starlette_client import OAuth
 from urllib.parse import quote
 from dotenv import load_dotenv
+from .bot_worker import ensure_translation_bot_for_language, stop_all_bots_for_room
 
 try:
     from livekit.api import AccessToken, VideoGrants
@@ -27,18 +16,25 @@ except Exception:
     AccessToken = None
     VideoGrants = None
 
-from backend.murf_pipeline import run_pipeline
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-load_dotenv(env_path)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV = os.path.join(os.path.dirname(BASE_DIR), ".env")
+load_dotenv(ENV)
+
 
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://chatfree.streamlit.app")
 BACKEND_URL = os.getenv("BACKEND_URL", "https://murf-coding-challenge-4-multilingual.onrender.com")
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
+LIVEKIT_URL = os.getenv("LIVEKIT_URL")
+
+if not (LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL):
+    logger.warning("LiveKit credentials not set. Set LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL in .env")
+
 oauth = OAuth()
 if CLIENT_ID and CLIENT_SECRET:
     oauth.register(
@@ -50,66 +46,46 @@ if CLIENT_ID and CLIENT_SECRET:
         client_kwargs={'scope': 'email openid'}
     )
 
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
-LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 
-if not (LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL):
-    logger.warning("LiveKit credentials not set. Set LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL in .env")
 
 users: Dict[str, Dict] = {}
 rooms: Dict[str, Dict] = {}
-MAX_ROOM_CAPACITY = 4
-TTS_CACHE: Dict[Tuple[str, str, str], Tuple[bytes, float]] = {}
-CACHE_TTL_SECONDS = 60 * 5
+MAX_ROOM_CAPACITY = 8
 
-app = FastAPI(title="Multilingual Chat Room")
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY", "super-secret"))
+# room shape: {
+#   code: {
+#       "public": bool,
+#       "members": [{"user_id": str, "language": str}],
+#       "bots": { lang_code: {"identity": str, "task": asyncio.Task} }
+#   }
+# }
+
+
+app = FastAPI(title="LiveKit Translation Bots")
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY", "super-secret")
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
-VOSK_SAMPLE_RATE = 16000
-VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "./models/vosk-model-small-en-us-0.15")
-vosk_model = None
+def _room_code(n: int = 6) -> str:
+    import string
 
-try:
-    from vosk import Model, KaldiRecognizer
-    if os.path.isdir(VOSK_MODEL_PATH):
-        vosk_model = Model(VOSK_MODEL_PATH)
-    else:
-        logging.warning(f"Vosk model not found at {VOSK_MODEL_PATH}")
-except Exception as e:
-    logging.warning(f"Vosk not available: {e}")
-    vosk_model = None
-
-def generate_room_code(length: int = 6) -> str:
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=n))
 
 
-def get_user_name(user_id: str) -> str:
-    return users.get(user_id, {}).get("name", user_id)
-
-
-def ensure_user(user_id: str, language: str = "en"):
-    """Best-effort auto-upsert so restarts don't break room join/create."""
+def _ensure_user(user_id: str, language: str = "en"):
     if user_id not in users:
         name = (user_id.split("@")[0] if "@" in user_id else user_id)[:32]
         users[user_id] = {"name": name, "language": language}
     else:
-        users[user_id].setdefault("language", language)
-
-
-async def synthesize_with_cache(text: str, target_lang: str, voice: str = "default"):
-    key = (text, target_lang, voice)
-    now = time.time()
-    entry = TTS_CACHE.get(key)
-    if entry and now - entry[1] < CACHE_TTL_SECONDS:
-        return entry[0]
-    audio_bytes = await asyncio.to_thread(generate_speech_from_text, text, target_lang, voice)
-    TTS_CACHE[key] = (audio_bytes, now)
-    return audio_bytes
+        users[user_id]["language"] = language or users[user_id].get("language", "en")
 
 
 class CreateRoomRequest(BaseModel):
@@ -136,26 +112,67 @@ class LiveKitJoinTokenReq(BaseModel):
     language: Optional[str] = "en"
 
 
-@app.get("/room_info")
-def room_info(room_code: str):
+with open(os.path.join(BASE_DIR, "templates", "room.html"), "r", encoding="utf-8") as f:
+    ROOM_HTML = f.read()
+
+
+@app.get("/room", response_class=HTMLResponse)
+def room_page(room_code: str, user_id: str, lang: Optional[str] = None):
     room = rooms.get(room_code)
-    if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
-    return {"members": room["members"]}
+    if not room or user_id not in [m["user_id"] for m in room["members"]]:
+        return HTMLResponse(
+            "<h2>Invalid room or user. Please (re)join from the app.</h2>",
+            status_code=400,
+        )
+    page = ROOM_HTML.replace("{{BACKEND_URL}}", BACKEND_URL).replace(
+        "{{FRONTEND_URL}}", FRONTEND_URL
+    )
+    return HTMLResponse(page)
+
+
+@app.get("/login/google")
+async def login_google(request: Request):
+    redirect_uri = request.url_for("auth_callback")
+    return await oauth.google.authorize_redirect(
+        request, redirect_uri, access_type="offline"
+    )
+
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request):
+    token = await oauth.google.authorize_access_token(request)
+    try:
+        user_info = await oauth.google.parse_id_token(
+            request, token, nonce=None, claims_options={"iss": {"essential": False}}
+        )
+    except Exception:
+        user_info = await oauth.google.userinfo(token=token)
+
+    user_email = user_info.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Email not found")
+
+    users[user_email] = {"name": user_email.split("@")[0], "language": "en"}
+    frontend_url = f"{FRONTEND_URL}/?user_id={quote(user_email)}&name={quote(users[user_email]['name'])}"
+    return RedirectResponse(frontend_url)
 
 
 @app.post("/create_room")
 def create_room(req: CreateRoomRequest):
-    ensure_user(req.user_id, req.language or "en")
-    room_code = generate_room_code()
-    rooms[room_code] = {"members": [{"user_id": req.user_id, "language": req.language or "en"}], "public": req.public}
-    logger.info(f"room created {room_code} by {req.user_id}")
-    return {"status": "success", "room_code": room_code}
+    _ensure_user(req.user_id, req.language or "en")
+    code = _room_code()
+    rooms[code] = {
+        "public": req.public,
+        "members": [{"user_id": req.user_id, "language": req.language or "en"}],
+        "bots": {},
+    }
+    log.info("room created %s by %s", code, req.user_id)
+    return {"status": "success", "room_code": code}
 
 
 @app.post("/join_room")
 def join_room(req: JoinRoomRequest):
-    ensure_user(req.user_id, req.language or "en")
+    _ensure_user(req.user_id, req.language or "en")
 
     if req.room_code:
         room = rooms.get(req.room_code)
@@ -164,16 +181,26 @@ def join_room(req: JoinRoomRequest):
         if len(room["members"]) >= MAX_ROOM_CAPACITY:
             raise HTTPException(status_code=400, detail="Room full")
         if not any(m["user_id"] == req.user_id for m in room["members"]):
-            room["members"].append({"user_id": req.user_id, "language": req.language or "en"})
+            room["members"].append(
+                {"user_id": req.user_id, "language": req.language or "en"}
+            )
+        asyncio.create_task(_reconcile_bots(req.room_code))
         return {"status": "success", "room_code": req.room_code}
-    else:
-        public_rooms = [code for code, r in rooms.items() if r["public"] and len(r["members"]) < MAX_ROOM_CAPACITY]
-        if not public_rooms:
-            raise HTTPException(status_code=400, detail="No public rooms available")
-        selected_code = random.choice(public_rooms)
-        if not any(m["user_id"] == req.user_id for m in rooms[selected_code]["members"]):
-            rooms[selected_code]["members"].append({"user_id": req.user_id, "language": req.language or "en"})
-        return {"status": "success", "room_code": selected_code}
+
+    public = [
+        code
+        for code, r in rooms.items()
+        if r["public"] and len(r["members"]) < MAX_ROOM_CAPACITY
+    ]
+    if not public:
+        raise HTTPException(status_code=400, detail="No public rooms available")
+    pick = random.choice(public)
+    if not any(m["user_id"] == req.user_id for m in rooms[pick]["members"]):
+        rooms[pick]["members"].append(
+            {"user_id": req.user_id, "language": req.language or "en"}
+        )
+    asyncio.create_task(_reconcile_bots(pick))
+    return {"status": "success", "room_code": pick}
 
 
 @app.post("/leave_room")
@@ -182,81 +209,97 @@ def leave_room(req: LeaveRoomRequest):
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     room["members"] = [m for m in room["members"] if m["user_id"] != req.user_id]
-    logger.info(f"user {req.user_id} left room {req.room_code} via API")
+    log.info("user %s left room %s", req.user_id, req.room_code)
+
+    asyncio.create_task(_reconcile_bots(req.room_code))
     return {"status": "success"}
 
 
-@app.get("/login/google")
-async def login_google(request: Request):
-    redirect_uri = request.url_for('auth_callback')
-    return await oauth.google.authorize_redirect(request, redirect_uri, access_type="offline")
+@app.get("/room_info")
+def room_info(room_code: str):
+    room = rooms.get(room_code)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    return {"members": room["members"], "bots": list(room["bots"].keys())}
 
-
-@app.get("/auth/callback")
-async def auth_callback(request: Request):
-    token = await oauth.google.authorize_access_token(request)
-    try:
-        user_info = await oauth.google.parse_id_token(request, token, nonce=None, claims_options={"iss": {"essential": False}})
-    except Exception:
-        user_info = await oauth.google.userinfo(token=token)
-
-    user_email = user_info.get('email')
-    if not user_email:
-        raise HTTPException(status_code=400, detail="Email not found")
-
-    users[user_email] = {"name": user_email.split('@')[0], "language": "en"}
-    frontend_url = f"{FRONTEND_URL}/?user_id={quote(user_email)}&name={quote(users[user_email]['name'])}"
-    return RedirectResponse(frontend_url)
-
-
-@app.post("/transcribe")
-async def transcribe_audio(file: UploadFile = File(...), target_lang: str = "en"):
-    audio_bytes = await file.read()
-    recognized, translated, tts_audio = await run_pipeline(audio_bytes, stt_lang="en-US", target_lang=target_lang)
-
-    tts_base64 = base64.b64encode(tts_audio or b"").decode("utf-8")
-    return {
-        "recognized_text": recognized,
-        "translated_text": translated,
-        "tts_audio_base64": tts_base64,
-    }
 
 @app.post("/livekit/join-token")
 def livekit_join_token(req: LiveKitJoinTokenReq):
-    """
-    Returns a LiveKit access token and LiveKit URL. Client will use these to connect to LiveKit (SFU) directly.
-    - req.room_code: string
-    - req.user_id: string
-    - req.name: optional display name
-    - req.language: optional language preference (stored server-side)
-    """
     if not (LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL):
-        raise HTTPException(500, "LiveKit is not configured on server.")
+        raise HTTPException(500, "LiveKit is not configured.")
+    if AccessToken is None or VideoGrants is None:
+        raise HTTPException(
+            500, "LiveKit server SDK not available (pip install livekit-api)."
+        )
 
-    ensure_user(req.user_id, req.language or "en")
     room = rooms.get(req.room_code)
     if not room:
-        rooms[req.room_code] = {"members": [{"user_id": req.user_id, "language": req.language or "en"}], "public": True}
-    else:
-        if not any(m["user_id"] == req.user_id for m in room["members"]):
-            room["members"].append({"user_id": req.user_id, "language": req.language or "en"})
-        else:
-            for m in room["members"]:
-                if m["user_id"] == req.user_id:
-                    m["language"] = req.language or m.get("language", "en")
-
-    if AccessToken is None or VideoGrants is None:
-        raise HTTPException(500, "LiveKit server SDK is not available on the server (check pip install).")
-    
-    try:
-        at = AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET).with_identity(req.user_id).with_name(req.name or req.user_id).with_grants(
-            VideoGrants(room_join=True, room=req.room_code, can_publish=True, can_subscribe=True, can_publish_data=True)
+        rooms[req.room_code] = {"public": True, "members": [], "bots": {}}
+        room = rooms[req.room_code]
+    found = next((m for m in room["members"] if m["user_id"] == req.user_id), None)
+    if not found:
+        room["members"].append(
+            {"user_id": req.user_id, "language": req.language or "en"}
         )
+    else:
+        found["language"] = req.language or found.get("language", "en")
+
+    asyncio.create_task(_reconcile_bots(req.room_code))
+
+    try:
+        meta = json.dumps({"language": req.language or "en"})
+        at = (
+            AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+            .with_identity(req.user_id)
+            .with_name(req.name or req.user_id)
+            .with_grants(
+                VideoGrants(
+                    room_join=True,
+                    room=req.room_code,
+                    can_publish=True,
+                    can_subscribe=True,
+                    can_publish_data=True,
+                )
+            )
+        )
+        if hasattr(at, "with_metadata"):
+            at = at.with_metadata(meta)
         token_jwt = at.to_jwt()
     except Exception as e:
-        logger.error(f"Failed to generate token: {e}")
-        raise HTTPException(500, f"LiveKit token generation failed: {str(e)}")
+        log.exception("Failed to mint token")
+        raise HTTPException(500, f"Token generation failed: {e}")
+
     return {"token": token_jwt, "url": LIVEKIT_URL, "room_code": req.room_code}
+
+
+async def _reconcile_bots(room_code: str):
+    """Create/stop bots so there is exactly 0 or 1 bot per language when needed.
+    If all members share the same language → no bots.
+    """
+    room = rooms.get(room_code)
+    if not room:
+        return
+    member_langs = [m.get("language", "en") for m in room["members"]]
+    unique_langs = sorted({l for l in member_langs if l})
+
+    if len(unique_langs) <= 1:
+
+        await stop_all_bots_for_room(room_code, room["bots"])
+        room["bots"].clear()
+        return
+
+    existing = set(room["bots"].keys())
+    for lang in unique_langs:
+        if lang not in existing:
+            identity, task = await ensure_translation_bot_for_language(
+                room_code, lang, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+            )
+            room["bots"][lang] = {"identity": identity, "task": task}
+    for lang in list(existing):
+        if lang not in unique_langs:
+            t = room["bots"].pop(lang, None)
+            if t and t.get("task"):
+                t["task"].cancel()
 
 
 ROOM_HTML = """
@@ -1102,158 +1145,3 @@ ROOM_HTML = """
 
 </html>
 """
-
-@app.get("/room", response_class=HTMLResponse)
-async def room_page(room_code: str, user_id: str):
-    room = rooms.get(room_code)
-    if not room or user_id not in [m["user_id"] for m in room["members"]]:
-        return HTMLResponse("<h2>Invalid room or user. Please (re)join from the app.</h2>", status_code=400)
-    page = ROOM_HTML
-    page = page.replace("{{BACKEND_URL}}", BACKEND_URL)
-    page = page.replace("{{FRONTEND_URL}}", FRONTEND_URL)
-    return HTMLResponse(page)
-
-
-def json_dumps(x: str) -> str:
-    import json as _json
-    return _json.dumps(x)
-
-
-@app.websocket("/ws/translate")
-async def ws_translate(ws: WebSocket):
-    await ws.accept()
-    speaker_id = None
-    from_lang = "auto"
-    target_lang = "en"
-    voice = "default"
-    recognizer = None
-    last_partial_emit = 0.0
-
-    try:
-        while True:
-            msg = await ws.receive()
-
-            if "text" in msg:
-                try:
-                    payload = json.loads(msg["text"])
-                except Exception:
-                    continue
-                mtype = payload.get("type")
-
-                if mtype == "start":
-                    speaker_id = payload.get("speakerId")
-                    from_lang = payload.get("fromLang", "auto")
-                    target_lang = payload.get("targetLang", "en")
-                    voice = payload.get("voice", voice)
-
-                    if vosk_model is not None:
-                        recognizer = KaldiRecognizer(vosk_model, 16000)
-                        recognizer.SetWords(True)
-
-                    await ws.send_text(json.dumps({
-                        "type": "status",
-                        "msg": "started",
-                        "speakerId": speaker_id,
-                        "fromLang": from_lang,
-                        "targetLang": target_lang,
-                    }))
-
-                elif mtype == "stop":
-                    if recognizer is not None:
-                        try:
-                            final_json = json.loads(recognizer.FinalResult())
-                            final_text = (final_json or {}).get("text", "").strip()
-                            if final_text:
-                                await ws.send_text(json.dumps({
-                                    "type": "finalText",
-                                    "speakerId": speaker_id,
-                                    "fromLang": from_lang,
-                                    "targetLang": target_lang,
-                                    "text": final_text
-                                }))
-                                await _translate_and_tts(ws, final_text, target_lang, voice, speaker_id, from_lang)
-                        except Exception:
-                            pass
-                    await ws.send_text(json.dumps({
-                        "type": "status",
-                        "msg": "stopped",
-                        "speakerId": speaker_id
-                    }))
-                continue
-
-            # --- audio frames ---
-            if "bytes" in msg:
-                frame = msg["bytes"]
-                if recognizer is None:
-                    continue
-
-                accepted = recognizer.AcceptWaveform(frame)
-                now = time.time()
-
-                if accepted:
-                    try:
-                        res = json.loads(recognizer.Result() or "{}")
-                        text_ = (res.get("text") or "").strip()
-                    except Exception:
-                        text_ = ""
-                    if text_:
-                        await ws.send_text(json.dumps({
-                            "type": "finalText",
-                            "speakerId": speaker_id,
-                            "fromLang": from_lang,
-                            "targetLang": target_lang,
-                            "text": text_
-                        }))
-                        await _translate_and_tts(ws, text_, target_lang, voice, speaker_id, from_lang)
-
-                else:
-                    if now - last_partial_emit > 0.2:
-                        try:
-                            pres = json.loads(recognizer.PartialResult() or "{}")
-                            ptext = (pres.get("partial") or "").strip()
-                        except Exception:
-                            ptext = ""
-                        if ptext:
-                            await ws.send_text(json.dumps({
-                                "type": "partialText",
-                                "speakerId": speaker_id,
-                                "fromLang": from_lang,
-                                "targetLang": target_lang,
-                                "text": ptext
-                            }))
-                        last_partial_emit = now
-
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        logging.exception(f"/ws/translate error: {e}")
-    finally:
-        if ws.application_state != WebSocketState.DISCONNECTED:
-            await ws.close()
-
-
-async def _translate_and_tts(ws: WebSocket, text: str, target_lang: str,
-                             voice: str, speaker_id: str, from_lang: str):
-    try:
-        _, translated, audio_bytes = await run_pipeline(text.encode(), stt_lang=from_lang, target_lang=target_lang, voice=voice)
-
-        if translated:
-            await ws.send_text(json.dumps({
-                "type": "finalText",
-                "speakerId": speaker_id,
-                "fromLang": from_lang,
-                "targetLang": target_lang,
-                "text": translated
-            }))
-        
-        if audio_bytes:
-            await ws.send_text(json.dumps({
-                "type": "audio",
-                "speakerId": speaker_id,
-                "fromLang": from_lang,
-                "targetLang": target_lang,
-                "mime": "audio/mpeg",
-                "b64": base64.b64encode(audio_bytes).decode("utf-8")
-            }))
-    except Exception as e:
-        logging.warning(f"Murf pipeline failed: {e}")
