@@ -61,7 +61,7 @@ class Bot:
         def _on_subscribed(track, publication, participant):
             if participant.identity.startswith("bot_"):
                 return
-            if track.kind == rtc.TrackKind.KIND_AUDIO:
+            if isinstance(track, rtc.RemoteAudioTrack):
                 log.info("bot[%s] subscribed to %s", self.room_code, participant.identity)
                 asyncio.create_task(self._consume_audio(track, participant.identity))
 
@@ -79,13 +79,13 @@ class Bot:
         log.info("bot[%s] stopped", self.room_code)
 
     async def _consume_audio(self, remote_audio: rtc.RemoteAudioTrack, speaker_id: str):
-        """Consume frames from LiveKit RemoteAudioTrack via stream()."""
-        try:
-            stream = await remote_audio.stream()
-            async for frame in stream:
-                await self._ingest_frame(frame, speaker_id)
-        except Exception as e:
-            log.error("Error consuming audio for %s: %s", speaker_id, e, exc_info=True)
+    """Consume frames from LiveKit RemoteAudioTrack via frame callbacks."""
+
+        def _on_frame(frame: rtc.AudioFrame):
+            asyncio.create_task(self._ingest_frame(frame, speaker_id))
+
+        remote_audio.add_frame_callback(_on_frame)
+        log.info("bot[%s] consuming audio from speaker %s", self.room_code, speaker_id)
 
     async def _ingest_frame(self, frame: "rtc.AudioFrame", speaker_id: str):
         now = time.time()
