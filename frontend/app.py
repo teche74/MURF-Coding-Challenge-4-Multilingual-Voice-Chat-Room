@@ -101,7 +101,6 @@ class AudioCallApp:
                                     json={"user_id": st.session_state['user_id'], "public": public , "language" : language})
                 if resp.status_code == 200:
                     st.session_state['room_code'] = resp.json()["room_code"]
-                    st.session_state['language'] = language
                     st.success(f"🎉 Room created: `{st.session_state['room_code']}`")
                     st.rerun()
                 else:
@@ -117,7 +116,6 @@ class AudioCallApp:
                                     json={"user_id": st.session_state['user_id'], "room_code": room_code or None , "language" : language})
                 if resp.status_code == 200:
                     st.session_state['room_code'] = resp.json()["room_code"]
-                    st.session_state['language']  = language
                     st.success(f"✅ Joined room: `{st.session_state['room_code']}`")
                     st.rerun()
                 else:

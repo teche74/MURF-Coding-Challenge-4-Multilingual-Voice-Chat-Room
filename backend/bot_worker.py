@@ -114,7 +114,9 @@ class RoomBotHandle:
         self.api_key = api_key
         self.api_secret = api_secret
         self._agent = TranslatorAgent()
-        self._session = AgentSession()
+        self._session = AgentSession(
+            url=self.url
+        )
         self.identity = f"bot_{room_code}"
 
     def _mint_token(self) -> str:
@@ -139,8 +141,7 @@ class RoomBotHandle:
         logger.info(f"[bot] starting Murf session for room {self.room_code}")
         await self._session.start(
             agent=self._agent,
-            url=LIVEKIT_URL,
-            token=token,
+            token=token
         )
         logger.info(f"[bot] started Murf session for room {self.room_code}")
 
