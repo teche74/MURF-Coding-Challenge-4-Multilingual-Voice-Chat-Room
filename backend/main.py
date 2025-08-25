@@ -8,11 +8,7 @@ from pydantic import BaseModel
 from authlib.integrations.starlette_client import OAuth
 from urllib.parse import quote
 from dotenv import load_dotenv
-from backend.bot_worker import (
-    ensure_translation_bot_for_language,
-    stop_all_bots_for_room,
-)
-
+from backend.bot_worker import ensure_room_bot, stop_room_bot
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -260,17 +256,15 @@ async def _reconcile_bots(room_code: str):
     unique_langs = sorted(set(member_langs))
 
     if len(unique_langs) <= 1:
-        await stop_all_bots_for_room(room_code, room["bots"])
+        await stop_room_bot(room_code, room["bots"])
         room["bots"].clear()
         return
 
     existing = set(room["bots"].keys())
     for lang in unique_langs:
         if lang not in existing:
-            identity, task = await ensure_translation_bot_for_language(
-                room_code, lang, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
-            )
-            room["bots"][lang] = {"identity": identity, "task": task}
+            bot = await ensure_room_bot(room_code, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+            room["bots"][lang] = {"identity": f"bot_{room_code}", "task": bot}
     for lang in list(existing):
         if lang not in unique_langs:
             t = room["bots"].pop(lang, None)
