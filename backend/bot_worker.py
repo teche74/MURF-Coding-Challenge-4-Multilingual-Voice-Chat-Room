@@ -28,7 +28,6 @@ class Bot:
         self.audio_sources: dict[str, rtc.AudioSource] = {}
         self.local_tracks: dict[str, rtc.LocalAudioTrack] = {}
 
-        # per-user TTS queues + tasks
         self.playback_queues: dict[str, asyncio.Queue] = defaultdict(asyncio.Queue)
         self.playback_tasks: dict[str, asyncio.Task] = {}
 
@@ -43,13 +42,14 @@ class Bot:
         await self.client.connect(self.url, self.token)
         log.info("bot[%s] connected", self.room_code)
 
-        @self.client.on("track_subscribed")
-        async def _on_subscribed(track, publication, participant):
+        def _on_subscribed(track, publication, participant):
             if participant.identity.startswith("bot_"):
                 return
             if track.kind == rtc.TrackKind.KIND_AUDIO:
                 log.info("bot[%s] subscribed to %s", self.room_code, participant.identity)
                 asyncio.create_task(self._consume_audio(track, participant.identity))
+
+        self.client.on("track_subscribed", _on_subscribed)
 
         await self.closed.wait()
 
@@ -75,7 +75,6 @@ class Bot:
                     target_lang = pref.get("language", "en-US")
                     voice = pref.get("voice", "en-US-Wavenet-A")
 
-                    # Run full pipeline for translation+TTS
                     _, translated, tts_bytes = await asyncio.to_thread(
                         process_audio_pipeline, pcm_bytes, "auto", target_lang, voice
                     )
@@ -157,7 +156,6 @@ class Bot:
         with contextlib.suppress(Exception):
             if self.client:
                 await self.client.disconnect()
-        # cancel playback workers
         for task in self.playback_tasks.values():
             task.cancel()
         self.closed.set()

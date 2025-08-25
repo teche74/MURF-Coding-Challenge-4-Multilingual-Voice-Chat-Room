@@ -298,27 +298,19 @@ async def _reconcile_bots(room_code: str):
     if not room:
         logger.warning(f"Room not found during bot reconciliation: room_code={room_code}")
         return
-    member_langs = [m.get("language", "en") for m in room["members"]]
-    unique_langs = sorted(set(member_langs))
 
-    if len(unique_langs) <= 1:
-        logger.info(f"Only one language in room {room_code}, stopping bots")
+    if len(room["members"]) <= 1:
+        logger.info(f"Room {room_code} has <=1 member, stopping bot")
         await stop_room_bot(room_code)
         room["bots"].clear()
         return
 
-    existing = set(room["bots"].keys())
-    for lang in unique_langs:
-        if lang not in existing:
-            bot = await ensure_room_bot(room_code, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-            room["bots"][lang] = {"identity": f"bot_{room_code}", "task": bot}
-            logger.info(f"Bot started for language {lang} in room {room_code}")
-    for lang in list(existing):
-        if lang not in unique_langs:
-            t = room["bots"].pop(lang, None)
-            if t and t.get("task"):
-                t["task"].cancel()
-                logger.info(f"Bot stopped for language {lang} in room {room_code}")
+    if not room["bots"]:
+        bot = await ensure_room_bot(room_code, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+        room["bots"]["translator"] = {"identity": f"bot_{room_code}", "task": bot}
+        logger.info(f"Bot started for room {room_code}")
+    else:
+        logger.debug(f"Bot already running for room {room_code}, nothing to do")
 
 
 ROOM_HTML = """
