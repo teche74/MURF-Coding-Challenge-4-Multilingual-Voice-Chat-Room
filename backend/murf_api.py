@@ -86,19 +86,22 @@ def get_default_voice(language: str) -> str:
         return _default_voice_cache[language]
 
     voices = get_available_voices()
-    for v in voices:
-        locale = v.get("locale")
-        if locale and locale.startswith(language):
-            _default_voice_cache[language] = v["voice_id"]
-            return v["voice_id"]
 
+    # First try exact language match
     for v in voices:
-        if v.get("locale", "").startswith("hi-IN"):
-            _default_voice_cache[language] = v["voice_id"]
-            return v["voice_id"]
+        locale = getattr(v, "locale", None)
+        if locale and locale.startswith(language):
+            _default_voice_cache[language] = v.voice_id
+            return v.voice_id
+
+    # Fallback to Hindi (hi-IN) if nothing found
+    for v in voices:
+        locale = getattr(v, "locale", "")
+        if locale.startswith("hi-IN"):
+            _default_voice_cache[language] = v.voice_id
+            return v.voice_id
 
     raise RuntimeError(f"No valid voice found for {language} and fallback failed")
-
 # -----------------------
 # Audio Conversion Helpers
 # -----------------------
