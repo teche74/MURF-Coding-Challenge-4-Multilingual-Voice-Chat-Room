@@ -554,13 +554,11 @@ ROOM_HTML = """
         <main class="main">
             <div class="status" id="status">Initializing...</div>
 
-
             <div id="localVideoContainer" class="tile" style="max-width:220px; margin:0 auto; display:none;">
                 <div class="small">Your Video</div>
             </div>
 
-            <div class="grid" id="tiles">
-            </div>
+            <div class="grid" id="tiles"></div>
 
             <div class="controls">
                 <button id="joinBtn" class="primary">Join Call</button>
@@ -577,10 +575,12 @@ ROOM_HTML = """
             </div>
         </main>
     </div>
+
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <script type="module">
         const BACKEND_URL = "{{BACKEND_URL}}";
         const FRONTEND_URL = "{{FRONTEND_URL}}";
+
         (async () => {
             const qs = new URLSearchParams(location.search);
             const ROOM = qs.get("room_code") || "";
@@ -589,13 +589,12 @@ ROOM_HTML = """
             document.getElementById('roomName').innerText = ROOM || "[unknown]";
 
             const TOKEN_ENDPOINT = BACKEND_URL + "/livekit/join-token";
-            console.log("ENDPOINT : ", TOKEN_ENDPOINT)
             let lk;
             try {
                 lk = await import('https://cdn.skypack.dev/livekit-client@^1.5.0');
             } catch (err) {
-                console.error("Failed to load livekit-client from CDN", err);
-                document.getElementById('status').innerText = "Failed to load LiveKit client. Check network.";
+                console.error("Failed to load livekit-client", err);
+                document.getElementById('status').innerText = "Failed to load LiveKit client.";
                 return;
             }
 
@@ -604,12 +603,10 @@ ROOM_HTML = """
             let room = null;
             let localAudioTrack = null;
             let localVideoTrack = null;
-            let audioCtx = null;
             let joined = false;
             const participants = new Map();
             const tilesByIdentity = new Map();
             const preferredLanguage = MY_LANG || '';
-
 
             function addParticipantListEntry(id, name, isMe = false) {
                 const ul = document.getElementById("participants");
@@ -636,12 +633,12 @@ ROOM_HTML = """
                 div.className = "tile";
                 div.id = "tile-" + btoa(identity).replace(/=/g, '');
                 div.innerHTML = `
-        <div class="avatar">
-            <img src="data:image/png;base64,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" alt="Default Avatar">
-        </div>
-        <div class="username">${displayName || identity}</div>
-        <div class="small" style="margin-top:8px;">lang: <span class="lang">-</span></div>
-      `;
+          <div class="avatar">
+            <img src="https://placekitten.com/100/100" alt="Avatar">
+          </div>
+          <div class="username">${displayName || identity}</div>
+          <div class="small" style="margin-top:8px;">lang: <span class="lang">-</span></div>
+        `;
                 document.getElementById("tiles").appendChild(div);
                 tilesByIdentity.set(identity, div);
                 return div;
@@ -650,12 +647,6 @@ ROOM_HTML = """
             function removeTile(identity) {
                 const t = tilesByIdentity.get(identity);
                 if (t) { t.remove(); tilesByIdentity.delete(identity); }
-            }
-
-            function setTileSpeaking(identity, speaking) {
-                const t = tilesByIdentity.get(identity);
-                if (!t) return;
-                t.classList.toggle("speaking", !!speaking);
             }
 
             function setTileLanguage(identity, lang) {
@@ -674,21 +665,6 @@ ROOM_HTML = """
                 box.scrollTop = box.scrollHeight;
             }
 
-            function ensureAudioContext() {
-                if (audioCtx == null) {
-                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                if (audioCtx.state !== "running") {
-                    const resume = () => {
-                        audioCtx.resume().catch(() => { });
-                        window.removeEventListener("click", resume);
-                        window.removeEventListener("keydown", resume);
-                    };
-                    window.addEventListener("click", resume, { once: true });
-                    window.addEventListener("keydown", resume, { once: true });
-                }
-            }
-
             function attachAudioTrack(track, identity) {
                 let existing = document.getElementById("audio-" + btoa(identity).replace(/=/g, ''));
                 if (existing) existing.remove();
@@ -701,158 +677,14 @@ ROOM_HTML = """
                 audio.muted = false;
                 audio.style.display = "none";
                 document.body.appendChild(audio);
-                const el = track.attach();
-                if (el.tagName && el.tagName.toLowerCase() === "audio") {
-                    audio.srcObject = el.srcObject || el.src;
-                } else {
-                    audio.srcObject = track.mediaStreamTrack ? new MediaStream([track.mediaStreamTrack]) : null;
-                }
 
-                try {
-                    ensureAudioContext();
-                    const ctx = audioCtx;
-                    const analyser = ctx.createAnalyser();
-                    const src = ctx.createMediaElementSource(audio);
-                    src.connect(analyser);
-                    analyser.fftSize = 256;
-                    const data = new Uint8Array(analyser.frequencyBinCount);
-                    let raf;
-                    const detect = () => {
-                        analyser.getByteFrequencyData(data);
-                        const v = data.reduce((a, b) => a + b, 0);
-                        setTileSpeaking(identity, v > 50);
-                        raf = requestAnimationFrame(detect);
-                    };
-                    detect();
-                    audio.addEventListener("ended", () => { cancelAnimationFrame(raf); });
-                } catch (e) {
-                    console.warn("Audio analyser unavailable", e);
-                }
-
-                audio.play().catch(e => {
-                    console.debug("autoplay blocked", e);
-                });
-
-
-                try { startTranslateStream(track, identity); } catch (e) { console.warn("stream err", e); }
-
+                track.attach(audio); // simple now
                 return audio;
-            }
-
-            const WS_URL = (BACKEND_URL.startsWith("https://") ? "wss://" + BACKEND_URL.slice(8)
-                : BACKEND_URL.startsWith("http://") ? "ws://" + BACKEND_URL.slice(7)
-                    : BACKEND_URL) + "/ws/translate";
-
-            let translateSockets = new Map();
-            let pcmCtx;
-
-            function ensurePCMContext() {
-                if (!pcmCtx) {
-                    pcmCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                }
-            }
-
-            function floatTo16bitPCM(float32Array) {
-                const out = new Int16Array(float32Array.length);
-                for (let i = 0; i < float32Array.length; i++) {
-                    let s = Math.max(-1, Math.min(1, float32Array[i]));
-                    out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                }
-                return out;
-            }
-
-            async function ensureWorklet(ctx) {
-                if (!ctx.audioWorklet) return false;
-                const code = `
-                    class PCMWriter extends AudioWorkletProcessor {
-                        process(inputs) {
-                        const input = inputs[0];
-                        if (input && input[0]) {
-                            this.port.postMessage(input[0]);
-                        }
-                        return true;
-                        }
-                    }
-                    registerProcessor('pcm-writer', PCMWriter);
-        `;
-                const blob = new Blob([code], { type: 'application/javascript' });
-                const url = URL.createObjectURL(blob);
-                await ctx.audioWorklet.addModule(url);
-                return true;
-            }
-
-            async function startTranslateStream(track, speakerId) {
-                ensurePCMContext();
-                const ctx = pcmCtx;
-                const stream = new MediaStream([track.mediaStreamTrack]);
-                const src = ctx.createMediaStreamSource(stream);
-
-                await ensureWorklet(ctx);
-                const worklet = new AudioWorkletNode(ctx, 'pcm-writer');
-                src.connect(worklet);
-
-                const ws = new WebSocket(WS_URL);
-                ws.binaryType = "arraybuffer";
-                translateSockets.set(speakerId, ws);
-
-                ws.addEventListener("open", () => {
-                    ws.send(JSON.stringify({
-                        type: "start",
-                        speakerId,
-                        fromLang: "auto",
-                        targetLang: preferredLanguage || "en",
-                        voice: "en-US-Wavenet-D"
-                    }));
-                });
-
-                const translatedAudio = new Audio();
-                translatedAudio.autoplay = true;
-                translatedAudio.playsInline = true;
-                let queue = [];
-                let playing = false;
-                function playNext() {
-                    if (playing || queue.length === 0) return;
-                    playing = true;
-                    const { mime, bytes } = queue.shift();
-                    const blob = new Blob([bytes], { type: mime || "audio/mpeg" });
-                    translatedAudio.src = URL.createObjectURL(blob);
-                    translatedAudio.onended = () => { playing = false; playNext(); };
-                    translatedAudio.onerror = () => { playing = false; playNext(); };
-                    translatedAudio.play().catch(() => { playing = false; });
-                }
-
-                ws.addEventListener("message", (ev) => {
-                    try {
-                        const data = JSON.parse(ev.data);
-                        if (data.type === "audio" && data.b64) {
-                            const bytes = Uint8Array.from(atob(data.b64), c => c.charCodeAt(0));
-                            queue.push({ mime: data.mime, bytes });
-                            playNext();
-                        }
-                        // (optional: handle partialText/finalText for captions)
-                    } catch { }
-                });
-
-                worklet.port.onmessage = (e) => {
-                    const floatFrame = e.data;
-                    const pcm16 = floatTo16bitPCM(floatFrame);
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(pcm16.buffer);
-                    }
-                };
-
-                room.on(RoomEvent.ParticipantDisconnected, (p) => {
-                    if (p.identity === speakerId) {
-                        try { ws.send(JSON.stringify({ type: "stop" })); } catch { }
-                        try { ws.close(); } catch { }
-                        translateSockets.delete(speakerId);
-                    }
-                });
             }
 
             async function joinCall() {
                 if (!ROOM || !USER) {
-                    alert("Missing room_code or user_id in URL query");
+                    alert("Missing room_code or user_id");
                     return;
                 }
                 document.getElementById('status').innerText = "Requesting token...";
@@ -870,7 +702,7 @@ ROOM_HTML = """
                 }
                 if (!tokenResp.ok) {
                     const body = await tokenResp.text();
-                    console.error("Token endpoint error", tokenResp.status, body);
+                    console.error("Token error", body);
                     document.getElementById('status').innerText = "Token request error";
                     return;
                 }
@@ -878,7 +710,6 @@ ROOM_HTML = """
                 document.getElementById('status').innerText = "Connecting to LiveKit...";
 
                 try {
-                    console.log("livekit url : ", livekitUrl)
                     room = new Room();
                     await room.connect(livekitUrl, token, { name: USER });
                 } catch (e) {
@@ -888,32 +719,17 @@ ROOM_HTML = """
                 }
 
                 document.getElementById('status').innerText = "Connected (LiveKit)";
-
                 document.getElementById('myLang').innerText = preferredLanguage || "(unknown)";
 
-                room.on(RoomEvent.ParticipantConnected, participant => {
-                    console.log("participantConnected", participant.identity);
-                    onParticipantConnected(participant);
-                });
-                room.on(RoomEvent.ParticipantDisconnected, participant => {
-                    console.log("participantDisconnected", participant.identity);
-                    onParticipantDisconnected(participant);
-                });
-                room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
-                    const speakingIds = new Set(speakers.map(s => s.identity));
-                    for (const id of tilesByIdentity.keys()) {
-                        setTileSpeaking(id, speakingIds.has(id));
-                    }
-                });
+                // participant handlers
+                room.on(RoomEvent.ParticipantConnected, onParticipantConnected);
+                room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
 
                 room.on(RoomEvent.DataReceived, (payload, participant) => {
                     try {
-                        const text = new TextDecoder().decode(payload);
-                        const parsed = JSON.parse(text);
+                        const parsed = JSON.parse(new TextDecoder().decode(payload));
                         if (parsed.type === "chat") {
                             addChatMessage(parsed.from, parsed.text, parsed.from === USER);
-                        } else if (parsed.type === "subtitle") {
-                            console.log("subtitle", parsed);
                         }
                     } catch (e) {
                         console.warn("Failed to parse data message", e);
@@ -922,80 +738,43 @@ ROOM_HTML = """
 
                 try {
                     const useVideo = document.getElementById('useVideo').checked;
-                    const tracks = await createLocalTracks({ audio: true, video: useVideo ? true : false });
+                    const tracks = await createLocalTracks({ audio: true, video: useVideo });
+                    localAudioTrack = tracks.find(t => t.kind === Track.Kind.Audio);
+                    localVideoTrack = tracks.find(t => t.kind === Track.Kind.Video);
 
-                    if (tracks && tracks.length > 0) {
-                        localAudioTrack = tracks.find(t => t.kind === Track.Kind.Audio);
-                        localVideoTrack = tracks.find(t => t.kind === Track.Kind.Video);
-
-                        if (localAudioTrack) {
-                            await room.localParticipant.publishTrack(localAudioTrack);
-                            document.getElementById('muteBtn').disabled = false;
-                            document.getElementById('unmuteBtn').disabled = false;
-                        }
-
-                        if (useVideo && localVideoTrack) {
-                            await room.localParticipant.publishTrack(localVideoTrack);
-
-                            const videoEl = document.createElement('video');
-                            videoEl.autoplay = true;
-                            videoEl.playsInline = true;
-                            videoEl.muted = true;
-                            localVideoTrack.attach(videoEl);
-
-                            const container = document.getElementById('localVideoContainer');
-                            container.style.display = "block";
-                            container.appendChild(videoEl);
-                        }
-
-                        document.getElementById('status').innerText = useVideo ? "Published local audio & video" : "Published local audio only";
-                    } else {
-                        document.getElementById('status').innerText = "No local tracks available";
+                    if (localAudioTrack) {
+                        await room.localParticipant.publishTrack(localAudioTrack);
+                        document.getElementById('muteBtn').disabled = false;
+                        document.getElementById('unmuteBtn').disabled = false;
+                    }
+                    if (localVideoTrack) {
+                        await room.localParticipant.publishTrack(localVideoTrack);
+                        const videoEl = document.createElement('video');
+                        videoEl.autoplay = true;
+                        videoEl.playsInline = true;
+                        videoEl.muted = true;
+                        localVideoTrack.attach(videoEl);
+                        const container = document.getElementById('localVideoContainer');
+                        container.style.display = "block";
+                        container.appendChild(videoEl);
                     }
                 } catch (e) {
-                    console.error("Failed to create/publish local tracks", e);
-                    document.getElementById('status').innerText = "Microphone/Camera access denied";
+                    console.error("Track publish failed", e);
                 }
 
                 for (const p of room.participants.values()) {
                     onParticipantConnected(p);
                 }
-
                 joined = true;
             }
 
-            async function onParticipantConnected(participant) {
+            function onParticipantConnected(participant) {
                 participants.set(participant.identity, participant);
                 addParticipantListEntry(participant.identity, participant.name || participant.identity, participant.identity === USER);
                 createTile(participant.identity, participant.name || participant.identity);
 
-                if (participant.metadata) {
-                    try {
-                        const meta = JSON.parse(participant.metadata);
-                        if (meta.language) setTileLanguage(participant.identity, meta.language);
-                    } catch (e) {
-                    }
-                }
-
-                participant.on(RoomEvent.TrackPublished, (publication) => {
-
-                    console.log("published", publication.trackSid, publication);
-                });
-
                 participant.on(RoomEvent.TrackSubscribed, (track, publication) => {
-
                     if (track.kind === Track.Kind.Audio) {
-                        const langHint = (publication && publication.metadata) ? publication.metadata : null;
-                        if (typeof langHint === 'string') {
-                            try {
-                                const parsed = JSON.parse(langHint);
-                                if (parsed && parsed.lang) {
-                                    setTileLanguage(participant.identity, parsed.lang);
-                                }
-                            } catch (e) {
-                            }
-                        }
-
                         attachAudioTrack(track, participant.identity);
                     }
                     if (track.kind === Track.Kind.Video) {
@@ -1012,98 +791,40 @@ ROOM_HTML = """
                         }
                     }
                 });
-
-                for (const pub of participant.tracks.values()) {
-                    if (pub.track) {
-                        if (pub.track.kind === Track.Kind.Audio) {
-                            attachAudioTrack(pub.track, participant.identity);
-                        }
-                        if (pub.track.kind === Track.Kind.Video) {
-                            const tile = tilesByIdentity.get(participant.identity);
-                            if (tile) {
-                                let videoWrap = tile.querySelector(".video-slot");
-                                if (!videoWrap) {
-                                    videoWrap = document.createElement("div");
-                                    videoWrap.className = "video-slot";
-                                    tile.appendChild(videoWrap);
-                                }
-                                let videoEl = videoWrap.querySelector("video");
-                                if (!videoEl) {
-                                    videoEl = document.createElement("video");
-                                    videoEl.autoplay = true;
-                                    videoEl.playsInline = true;
-                                    videoWrap.appendChild(videoEl);
-                                }
-                                track.attach(videoEl);
-                            }
-                        }
-                    } else {
-                        participant.subscribe(pub).catch(() => { });
-                    }
-                }
             }
 
             function onParticipantDisconnected(participant) {
                 participants.delete(participant.identity);
                 removeParticipantListEntry(participant.identity);
                 removeTile(participant.identity);
-
-                const audioEl = document.getElementById("audio-" + btoa(participant.identity).replace(/=/g, ''));
-                if (audioEl) audioEl.remove();
             }
 
-
-            document.getElementById("joinBtn").addEventListener("click", async () => {
-
-                ensureAudioContext();
-                if (!joined) {
-                    await joinCall();
-                } else {
-                    alert("Already joined");
-                }
-            });
-
+            // Buttons
+            document.getElementById("joinBtn").addEventListener("click", joinCall);
             document.getElementById("muteBtn").addEventListener("click", () => {
-                if (localAudioTrack) {
-                    localAudioTrack.setMuted(true);
-                    document.getElementById('status').innerText = "Muted";
-                }
+                if (localAudioTrack) localAudioTrack.setMuted(true);
             });
             document.getElementById("unmuteBtn").addEventListener("click", () => {
-                if (localAudioTrack) {
-                    localAudioTrack.setMuted(false);
-                    document.getElementById('status').innerText = "Unmuted";
-                }
+                if (localAudioTrack) localAudioTrack.setMuted(false);
+            });
+            document.getElementById("leaveBtn").addEventListener("click", () => {
+                if (room) room.disconnect();
+                room = null;
+                joined = false;
+                document.getElementById('status').innerText = "Left";
             });
 
-            document.getElementById("leaveBtn").addEventListener("click", async () => {
-                if (room) {
-                    try { room.disconnect(); } catch (e) { }
-                    room = null;
-                    joined = false;
-                    document.getElementById('status').innerText = "Left";
-                }
-
-                const redirect = (typeof FRONTEND_URL !== 'undefined') ? FRONTEND_URL : "/";
-
-            });
-
-            document.getElementById("sendChatBtn").addEventListener("click", async () => {
+            document.getElementById("sendChatBtn").addEventListener("click", () => {
                 const input = document.getElementById("chatInput");
                 const text = input.value.trim();
                 if (!text || !room) return;
                 const payload = JSON.stringify({ type: "chat", from: USER, text });
-
                 room.localParticipant.publishData(new TextEncoder().encode(payload), DataPacket_Kind.RELIABLE);
                 addChatMessage(USER, text, true);
                 input.value = "";
             });
 
-
-            window.__lk_room = () => room;
-
             document.getElementById('status').innerText = "Ready — click Join Call to start";
-
             if (preferredLanguage) document.getElementById('myLang').innerText = preferredLanguage;
         })();
     </script>
