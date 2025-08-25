@@ -117,8 +117,10 @@ class LiveKitJoinTokenReq(BaseModel):
 
 @app.get("/room", response_class=HTMLResponse)
 def room_page(room_code: str, user_id: str, lang: Optional[str] = None):
+    logger.info(f"GET /room called with room_code={room_code}, user_id={user_id}, lang={lang}")
     room = rooms.get(room_code)
     if not room or user_id not in [m["user_id"] for m in room["members"]]:
+        logger.warning(f"Invalid room or user: room_code={room_code}, user_id={user_id}")
         return HTMLResponse(
             "<h2>Invalid room or user. Please (re)join from the app.</h2>",
             status_code=400,
@@ -126,10 +128,12 @@ def room_page(room_code: str, user_id: str, lang: Optional[str] = None):
     page = ROOM_HTML.replace("{{BACKEND_URL}}", BACKEND_URL).replace(
         "{{FRONTEND_URL}}", FRONTEND_URL
     )
+    logger.info(f"Room page served for room_code={room_code}, user_id={user_id}")
     return HTMLResponse(page)
 
 @app.post("/create_room")
 def create_room(req: CreateRoomRequest):
+    logger.info(f"POST /create_room called by user_id={req.user_id}, public={req.public}, language={req.language}, voice={req.voice}")
     _ensure_user(req.user_id, req.language, req.voice)
     code = _room_code()
     rooms[code] = {
@@ -137,18 +141,21 @@ def create_room(req: CreateRoomRequest):
         "members": [{"user_id": req.user_id, "language": req.language or "en"}],
         "bots": {},
     }
-    logger.info("room created %s by %s", code, req.user_id)
+    logger.info(f"Room created: code={code}, by user_id={req.user_id}")
     return {"status": "success", "room_code": code}
 
 @app.post("/join_room")
 async def join_room(req: JoinRoomRequest):
+    logger.info(f"POST /join_room called by user_id={req.user_id}, room_code={req.room_code}, language={req.language}, voice={req.voice}")
     _ensure_user(req.user_id, req.language, req.voice)
 
     if req.room_code:
         room = rooms.get(req.room_code)
         if not room:
+            logger.error(f"Room not found: room_code={req.room_code}")
             raise HTTPException(status_code=400, detail="Room not found")
         if len(room["members"]) >= MAX_ROOM_CAPACITY:
+            logger.warning(f"Room full: room_code={req.room_code}")
             raise HTTPException(status_code=400, detail="Room full")
 
         if not any(m["user_id"] == req.user_id for m in room["members"]):
@@ -157,17 +164,21 @@ async def join_room(req: JoinRoomRequest):
                 "language": req.language,
                 "voice": req.voice
             })
+            logger.info(f"User {req.user_id} joined room {req.room_code}")
 
         bot = await ensure_room_bot(req.room_code, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
         await bot.set_user_pref(req.user_id, req.language, req.voice)
+        logger.info(f"Bot ensured for room {req.room_code}")
 
         return {"status": "success", "room_code": req.room_code}
 
     public = [code for code, r in rooms.items() if r["public"] and len(r["members"]) < MAX_ROOM_CAPACITY]
     if not public:
+        logger.warning("No public rooms available")
         raise HTTPException(status_code=400, detail="No public rooms available")
 
     pick = random.choice(public)
+    logger.info(f"User {req.user_id} joining random public room {pick}")
 
     if not any(m["user_id"] == req.user_id for m in rooms[pick]["members"]):
         rooms[pick]["members"].append({
@@ -175,33 +186,41 @@ async def join_room(req: JoinRoomRequest):
             "language": req.language,
             "voice": req.voice
         })
+        logger.info(f"User {req.user_id} added to room {pick}")
 
     bot = await ensure_room_bot(pick, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     await bot.set_user_pref(req.user_id, req.language, req.voice)
+    logger.info(f"Bot ensured for room {pick}")
 
     return {"status": "success", "room_code": pick}
 
 @app.post("/leave_room")
 async def leave_room(req: LeaveRoomRequest):
+    logger.info(f"POST /leave_room called by user_id={req.user_id}, room_code={req.room_code}")
     room = rooms.get(req.room_code)
     if not room:
+        logger.error(f"Room not found: room_code={req.room_code}")
         raise HTTPException(status_code=404, detail="Room not found")
     room["members"] = [m for m in room["members"] if m["user_id"] != req.user_id]
-    logger.info("User %s left room %s", req.user_id, req.room_code)
+    logger.info(f"User {req.user_id} left room {req.room_code}")
     asyncio.create_task(_reconcile_bots(req.room_code))
     return {"status": "success"}
 
 
 @app.get("/room_info")
 def room_info(room_code: str):
+    logger.info(f"GET /room_info called for room_code={room_code}")
     room = rooms.get(room_code)
     if not room:
+        logger.error(f"Room not found: room_code={room_code}")
         raise HTTPException(status_code=404, detail="Room not found")
+    logger.info(f"Room info served for room_code={room_code}")
     return {"members": room["members"], "bots": list(room["bots"].keys())}
 
 
 @app.get("/login/google")
 async def login_google(request: Request):
+    logger.info("GET /login/google called")
     redirect_uri = request.url_for("auth_callback")
     return await oauth.google.authorize_redirect(
         request, redirect_uri, access_type="offline"
@@ -210,28 +229,36 @@ async def login_google(request: Request):
 
 @app.get("/auth/callback")
 async def auth_callback(request: Request):
+    logger.info("GET /auth/callback called")
     token = await oauth.google.authorize_access_token(request)
     try:
         user_info = await oauth.google.parse_id_token(
             request, token, nonce=None, claims_options={"iss": {"essential": False}}
         )
+        logger.info("Google ID token parsed successfully")
     except Exception:
         user_info = await oauth.google.userinfo(token=token)
+        logger.warning("Google ID token parse failed, fallback to userinfo")
 
     user_email = user_info.get("email")
     if not user_email:
+        logger.error("Email not found in user_info")
         raise HTTPException(status_code=400, detail="Email not found")
 
     users[user_email] = {"name": user_email.split("@")[0], "language": "en"}
+    logger.info(f"User logged in: {user_email}")
     frontend_url = f"{FRONTEND_URL}/?user_id={quote(user_email)}&name={quote(users[user_email]['name'])}"
     return RedirectResponse(frontend_url)
 
 
 @app.post("/livekit/join-token")
 async def livekit_join_token(req: LiveKitJoinTokenReq):
+    logger.info(f"POST /livekit/join-token called for room_code={req.room_code}, user_id={req.user_id}, language={req.language}, voice={req.voice}")
     if not (LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL):
+        logger.error("LiveKit not configured")
         raise HTTPException(500, "LiveKit not configured")
     if AccessToken is None or VideoGrants is None:
+        logger.error("LiveKit server SDK missing")
         raise HTTPException(500, "LiveKit server SDK missing")
 
     _ensure_user(req.user_id, req.language, req.voice)
@@ -239,9 +266,11 @@ async def livekit_join_token(req: LiveKitJoinTokenReq):
     found = next((m for m in room["members"] if m["user_id"] == req.user_id), None)
     if not found:
         room["members"].append({"user_id": req.user_id, "language": req.language, "voice": req.voice})
+        logger.info(f"User {req.user_id} added to room {req.room_code}")
     else:
         found["language"] = req.language
         found["voice"] = req.voice
+        logger.info(f"User {req.user_id} preferences updated in room {req.room_code}")
 
     asyncio.create_task(_reconcile_bots(req.room_code))
 
@@ -256,6 +285,7 @@ async def livekit_join_token(req: LiveKitJoinTokenReq):
         if hasattr(at, "with_metadata"):
             at = at.with_metadata(meta)
         token_jwt = at.to_jwt()
+        logger.info(f"LiveKit token minted for user_id={req.user_id}, room_code={req.room_code}")
     except Exception as e:
         logger.exception("Failed to mint token")
         raise HTTPException(500, f"Token generation failed: {e}")
@@ -263,13 +293,16 @@ async def livekit_join_token(req: LiveKitJoinTokenReq):
     return {"token": token_jwt, "url": LIVEKIT_URL, "room_code": req.room_code}
 
 async def _reconcile_bots(room_code: str):
+    logger.info(f"Reconciling bots for room_code={room_code}")
     room = rooms.get(room_code)
     if not room:
+        logger.warning(f"Room not found during bot reconciliation: room_code={room_code}")
         return
     member_langs = [m.get("language", "en") for m in room["members"]]
     unique_langs = sorted(set(member_langs))
 
     if len(unique_langs) <= 1:
+        logger.info(f"Only one language in room {room_code}, stopping bots")
         await stop_room_bot(room_code)
         room["bots"].clear()
         return
@@ -279,11 +312,13 @@ async def _reconcile_bots(room_code: str):
         if lang not in existing:
             bot = await ensure_room_bot(room_code, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
             room["bots"][lang] = {"identity": f"bot_{room_code}", "task": bot}
+            logger.info(f"Bot started for language {lang} in room {room_code}")
     for lang in list(existing):
         if lang not in unique_langs:
             t = room["bots"].pop(lang, None)
             if t and t.get("task"):
                 t["task"].cancel()
+                logger.info(f"Bot stopped for language {lang} in room {room_code}")
 
 
 ROOM_HTML = """
