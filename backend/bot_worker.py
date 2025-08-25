@@ -114,9 +114,7 @@ class RoomBotHandle:
         self.api_key = api_key
         self.api_secret = api_secret
         self._agent = TranslatorAgent()
-        self._session = AgentSession(
-            url=self.url
-        )
+        self._session = AgentSession()
         self.identity = f"bot_{room_code}"
 
     def _mint_token(self) -> str:
