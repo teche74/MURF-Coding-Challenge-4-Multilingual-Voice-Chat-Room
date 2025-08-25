@@ -56,12 +56,12 @@ MAX_ROOM_CAPACITY = 4
 #   code: {
 #       "public": bool,
 #       "members": [{"user_id": str, "language": str}],
-#       "bots": { lang_code: {"identity": str, "task": asyncio.Task} }
+#       "bot": Optional[object]
 #   }
 # }
 
 
-app = FastAPI(title="LiveKit Translation Bots")
+app = FastAPI(title="LiveKit Translation bot")
 app.add_middleware(
     SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY", "super-secret")
 )
@@ -139,7 +139,7 @@ def create_room(req: CreateRoomRequest):
     rooms[code] = {
         "public": req.public,
         "members": [{"user_id": req.user_id, "language": req.language or "en"}],
-        "bots": {},
+        "bot": None,
     }
     logger.info(f"Room created: code={code}, by user_id={req.user_id}")
     return {"status": "success", "room_code": code}
@@ -168,7 +168,7 @@ async def join_room(req: JoinRoomRequest):
 
         bot = await ensure_room_bot(req.room_code, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
         await bot.set_user_pref(req.user_id, req.language, req.voice)
-        logger.info(f"Bot ensured for room {req.room_code}")
+        logger.info(f"bot ensured for room {req.room_code}")
 
         return {"status": "success", "room_code": req.room_code}
 
@@ -190,7 +190,7 @@ async def join_room(req: JoinRoomRequest):
 
     bot = await ensure_room_bot(pick, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
     await bot.set_user_pref(req.user_id, req.language, req.voice)
-    logger.info(f"Bot ensured for room {pick}")
+    logger.info(f"bot ensured for room {pick}")
 
     return {"status": "success", "room_code": pick}
 
@@ -215,7 +215,7 @@ def room_info(room_code: str):
         logger.error(f"Room not found: room_code={room_code}")
         raise HTTPException(status_code=404, detail="Room not found")
     logger.info(f"Room info served for room_code={room_code}")
-    return {"members": room["members"], "bots": list(room["bots"].keys())}
+    return {"members": room["members"], "bot": bool(room["bot"])}
 
 
 @app.get("/login/google")
@@ -262,7 +262,7 @@ async def livekit_join_token(req: LiveKitJoinTokenReq):
         raise HTTPException(500, "LiveKit server SDK missing")
 
     _ensure_user(req.user_id, req.language, req.voice)
-    room = rooms.setdefault(req.room_code, {"public": True, "members": [], "bots": {}})
+    room = rooms.setdefault(req.room_code, {"public": True, "members": [], "bot": None})
     found = next((m for m in room["members"] if m["user_id"] == req.user_id), None)
     if not found:
         room["members"].append({"user_id": req.user_id, "language": req.language, "voice": req.voice})
@@ -280,7 +280,13 @@ async def livekit_join_token(req: LiveKitJoinTokenReq):
             AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
             .with_identity(req.user_id)
             .with_name(req.name or req.user_id)
-            .with_grants(VideoGrants(room_join=True, room=req.room_code, can_publish=True, can_subscribe=True, can_publish_data=True))
+            .with_grants(VideoGrants(
+                room_join=True,
+                room=req.room_code,
+                can_publish=True,
+                can_subscribe=True,
+                can_publish_data=True
+            ))
         )
         if hasattr(at, "with_metadata"):
             at = at.with_metadata(meta)
@@ -293,25 +299,19 @@ async def livekit_join_token(req: LiveKitJoinTokenReq):
     return {"token": token_jwt, "url": LIVEKIT_URL, "room_code": req.room_code}
 
 async def _reconcile_bots(room_code: str):
-    logger.info(f"Reconciling bots for room_code={room_code}")
     room = rooms.get(room_code)
     if not room:
-        logger.warning(f"Room not found during bot reconciliation: room_code={room_code}")
         return
 
     if len(room["members"]) <= 1:
-        logger.info(f"Room {room_code} has <=1 member, stopping bot")
-        await stop_room_bot(room_code)
-        room["bots"].clear()
+        if room.get("bot"):
+            await stop_room_bot(room_code)
+            room["bot"] = None
         return
 
-    if not room["bots"]:
+    if not room.get("bot"):
         bot = await ensure_room_bot(room_code, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-        room["bots"]["translator"] = {"identity": f"bot_{room_code}", "task": bot}
-        logger.info(f"Bot started for room {room_code}")
-    else:
-        logger.debug(f"Bot already running for room {room_code}, nothing to do")
-
+        room["bot"] = bot
 
 ROOM_HTML = """
 <!DOCTYPE html>
