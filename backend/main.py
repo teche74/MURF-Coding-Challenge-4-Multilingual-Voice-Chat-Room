@@ -143,24 +143,42 @@ def create_room(req: CreateRoomRequest):
 @app.post("/join_room")
 async def join_room(req: JoinRoomRequest):
     _ensure_user(req.user_id, req.language, req.voice)
+
     if req.room_code:
         room = rooms.get(req.room_code)
         if not room:
             raise HTTPException(status_code=400, detail="Room not found")
         if len(room["members"]) >= MAX_ROOM_CAPACITY:
             raise HTTPException(status_code=400, detail="Room full")
+
         if not any(m["user_id"] == req.user_id for m in room["members"]):
-            room["members"].append({"user_id": req.user_id, "language": req.language, "voice": req.voice})
-        asyncio.create_task(_reconcile_bots(req.room_code))
+            room["members"].append({
+                "user_id": req.user_id,
+                "language": req.language,
+                "voice": req.voice
+            })
+
+        bot = await ensure_room_bot(req.room_code, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+        await bot.set_user_pref(req.user_id, req.language, req.voice)
+
         return {"status": "success", "room_code": req.room_code}
 
     public = [code for code, r in rooms.items() if r["public"] and len(r["members"]) < MAX_ROOM_CAPACITY]
     if not public:
         raise HTTPException(status_code=400, detail="No public rooms available")
+
     pick = random.choice(public)
+
     if not any(m["user_id"] == req.user_id for m in rooms[pick]["members"]):
-        rooms[pick]["members"].append({"user_id": req.user_id, "language": req.language, "voice": req.voice})
-    asyncio.create_task(_reconcile_bots(pick))
+        rooms[pick]["members"].append({
+            "user_id": req.user_id,
+            "language": req.language,
+            "voice": req.voice
+        })
+
+    bot = await ensure_room_bot(pick, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+    await bot.set_user_pref(req.user_id, req.language, req.voice)
+
     return {"status": "success", "room_code": pick}
 
 @app.post("/leave_room")
