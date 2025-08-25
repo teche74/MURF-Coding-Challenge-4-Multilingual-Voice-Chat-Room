@@ -63,8 +63,12 @@ MAX_ROOM_CAPACITY = 4
 
 app = FastAPI(title="LiveKit Translation bot")
 app.add_middleware(
-    SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY", "super-secret")
+    SessionMiddleware, 
+    secret_key=os.getenv("SESSION_SECRET_KEY", "super-secret"),
+    same_site="none",
+    https_only=True,
 )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -222,6 +226,7 @@ def room_info(room_code: str):
 async def login_google(request: Request):
     logger.info("GET /login/google called")
     redirect_uri = request.url_for("auth_callback")
+    logger.debug("session before authorize_redirect: keys=%s", list(request.session.keys()))
     return await oauth.google.authorize_redirect(
         request, redirect_uri, access_type="offline"
     )
@@ -230,6 +235,8 @@ async def login_google(request: Request):
 @app.get("/auth/callback")
 async def auth_callback(request: Request):
     logger.info("GET /auth/callback called")
+    logger.info("GET /auth/callback called")
+    logger.debug("session on callback: keys=%s", list(request.session.keys()))
     token = await oauth.google.authorize_access_token(request)
     try:
         user_info = await oauth.google.parse_id_token(
