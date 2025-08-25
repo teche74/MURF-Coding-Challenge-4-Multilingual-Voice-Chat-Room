@@ -59,7 +59,7 @@ LANGUAGE_CODE_MAP = {
 
 
 def normalize_language(code: str) -> str:
-    """Convert 2-letter code to Murf locale. Fallback to en-US."""
+    """Convert 2-letter code to Murf locale. Fallback to hi-IN."""
     if not code:
         return "hi-IN"
     if code in LANGUAGE_CODE_MAP:
@@ -129,7 +129,7 @@ def _try_convert_container_to_wav(blob_bytes):
 # -----------------------
 # Speech to Text (Murf)
 # -----------------------
-def speech_to_text_murf(audio_bytes, sample_rate=16000, language="en-US"):
+def speech_to_text_murf(audio_bytes, sample_rate=16000, language="hi-IN"):
     if len(audio_bytes) >= 4 and audio_bytes[:4] == b'RIFF':
         wav_bytes = audio_bytes
     else:
@@ -156,7 +156,6 @@ def translate_text_murf(text, target_language="es-ES"):
 # Text to Speech (Murf)
 # -----------------------
 def generate_speech_from_text(text, language="en-US", voice=None):
-    # pick a valid voice if not provided
     if not voice:
         voice = get_default_voice(language)
 
@@ -165,24 +164,36 @@ def generate_speech_from_text(text, language="en-US", voice=None):
         text=text,
         voice_id=voice,
         format="MP3",
-        sample_rate=44100.0
+        sample_rate=44100.0,
     )
 
+    # Case 1: Murf returns raw bytes
+    if isinstance(response, (bytes, bytearray)):
+        return bytes(response)
+
+    # Case 2: Murf returns dict (JSON-like)
+    if isinstance(response, dict):
+        if "audio" in response:
+            audio_obj = response["audio"]
+            if isinstance(audio_obj, dict) and "data" in audio_obj:
+                import base64
+                return base64.b64decode(audio_obj["data"])
+
+    # Case 3: Murf returns object with attributes
     for attr in ("content", "audio", "audio_bytes", "data"):
         if hasattr(response, attr):
             blob = getattr(response, attr)
             if isinstance(blob, (bytes, bytearray)):
                 return bytes(blob)
 
-    if isinstance(response, (bytes, bytearray)):
-        return bytes(response)
-
+    # Debug fallback
+    logger.error("Unsupported Murf TTS response: %s", response)
     raise RuntimeError("Unsupported Murf TTS response shape")
 
 # -----------------------
 # Full pipeline: STT → Translate → TTS
 # -----------------------
-def process_audio_pipeline(audio_bytes, stt_lang="en-US", target_lang="es-ES", voice=None):
+def process_audio_pipeline(audio_bytes, stt_lang="hi-IN", target_lang="es-ES", voice=None):
     recognized = speech_to_text_murf(audio_bytes, language=stt_lang)
     if not recognized:
         return None, None, None
