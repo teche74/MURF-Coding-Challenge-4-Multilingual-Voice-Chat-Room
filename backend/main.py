@@ -115,10 +115,6 @@ class LiveKitJoinTokenReq(BaseModel):
     voice: Optional[str] = "default"
 
 
-with open(os.path.join(BASE_DIR, "templates", "room.html"), "r", encoding="utf-8") as f:
-    ROOM_HTML = f.read()
-
-
 @app.get("/room", response_class=HTMLResponse)
 def room_page(room_code: str, user_id: str, lang: Optional[str] = None):
     room = rooms.get(room_code)
