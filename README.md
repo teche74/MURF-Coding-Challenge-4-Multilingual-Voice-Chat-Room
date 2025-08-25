@@ -14,7 +14,11 @@ The app mimics the experience of a **group call (like WhatsApp/Zoom)** with esse
 - Automatic joining into a voice call on entry.  
 - Controls for **Mute / Unmute / Leave**.  
 - Support for **multiple users in a room**.  
-- Real-time updates when users join or leave.  
+- Real-time updates when users join or leave.
+
+
+<img width="1591" height="527" alt="image" src="https://github.com/user-attachments/assets/4c344e30-9a54-4332-9c4c-f25bd6e7ad8e" />
+
 
 ---
 
