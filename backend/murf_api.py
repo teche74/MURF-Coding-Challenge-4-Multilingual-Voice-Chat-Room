@@ -101,8 +101,7 @@ def generate_speech_from_text(text, language="en-US", voice="en-US-Wavenet-D"):
         text=text,
         voice_id=voice,
         format="MP3",
-        sample_rate=44100.0,
-        language=language
+        sample_rate=44100.0
     )
 
     if hasattr(response, "audio_file") and isinstance(response.audio_file, str) and os.path.exists(response.audio_file):
