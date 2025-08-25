@@ -79,7 +79,7 @@ class Bot:
         log.info("bot[%s] stopped", self.room_code)
 
     async def _consume_audio(self, remote_audio: rtc.RemoteAudioTrack, speaker_id: str):
-    """Consume frames from LiveKit RemoteAudioTrack via frame callbacks."""
+        """Consume frames from LiveKit RemoteAudioTrack via frame callbacks."""
 
         def _on_frame(frame: rtc.AudioFrame):
             asyncio.create_task(self._ingest_frame(frame, speaker_id))
