@@ -88,7 +88,7 @@ class AudioCallApp:
     def show_room_options(self):
         st.markdown("<div class='subheader'>🛠 Choose Your Room Option</div>", unsafe_allow_html=True)
 
-        language = st.selectbox("🌐 Choose Your Language", ["en", "es", "fr", "hi", "de"], key="language")
+        language = st.selectbox("🌐 Choose Your Language", ["English - US & Canada", "English - UK", "English - India", "English - Australia", "English - Scotland", "Spanish - Mexico", "Spanish - Spain", "French - France" , "German - Germany", "Italian - Italy", "Dutch - Netherlands", "Portuguese - Brazil", "Chinese - China", "Japanese - Japan", "Korean - Korea", "Hindi - India", "Tamil - India", "Bengali - India", "Croatian - Croatia", "Slovak - Slovakia", "Polish - Poland", "Greek - Greece"], key="language")
 
         col1, col2 = st.columns(2)
 

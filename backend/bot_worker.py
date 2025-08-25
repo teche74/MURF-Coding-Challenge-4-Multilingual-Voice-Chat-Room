@@ -41,6 +41,7 @@ from backend.murf_api import (
     speech_to_text_murf,
     translate_text_murf,
     generate_speech_from_text,
+    get_default_voice,
 )
 
 logger = logging.getLogger("bot")
@@ -132,11 +133,12 @@ class TranslatorAgent(Agent):
     async def on_enter(self):
         logger.info("[agent] joined session")
         try:
+            voice = get_default_voice("hi-IN")
             tts_blob = await asyncio.to_thread(
                 generate_speech_from_text,
                 "Translator bot has joined the room.",
-                language="en-US",
-                voice="en-US-Wavenet-D"
+                language="hi-IN",
+                voice=voice
             )
             if tts_blob:
                 audio_iter = _bytes_to_audio_frames_async(tts_blob, sample_rate=44100, channels=1, frame_ms=FRAME_MS)
@@ -146,9 +148,9 @@ class TranslatorAgent(Agent):
     
     async def set_user_pref(self, user_id: str, language: str, voice: Optional[str] = None):
         if not language:
-            language = "en-US"
+            language = "hi-IN"
         if not voice:
-            voice = "en-US-Wavenet-D"
+            voice = get_default_voice(language)
         self.user_prefs[user_id] = {"language": language, "voice": voice}
         logger.info(f"[agent] prefs set for {user_id} -> {language}, {voice}")
 
@@ -181,7 +183,7 @@ class TranslatorAgent(Agent):
         """Take a completed speech chunk (PCM16LE bytes) and fan-out translations to other participants."""
         if not pcm_bytes:
             return
-        speaker_pref = self.user_prefs.get(speaker_id, {"language": "en-US", "voice": "en-US-Wavenet-D"})
+        speaker_pref = self.user_prefs.get(speaker_id, {"language": "hi-IN", "voice": get_default_voice("hi-IN")})
         speaker_lang = speaker_pref.get("language", "en-US")
 
         # STT (blocking) -> run in thread
@@ -200,8 +202,8 @@ class TranslatorAgent(Agent):
         for target_id, pref in self.user_prefs.items():
             if target_id == speaker_id:
                 continue
-            to_lang = pref.get("language", "en-US")
-            voice = pref.get("voice", "en-US-Wavenet-D")
+            to_lang = pref.get("language", "hi-IN")
+            voice = pref.get("voice") or get_default_voice(to_lang)
             tasks.append(asyncio.create_task(self._translate_and_play_for_target(recognized, speaker_lang, target_id, to_lang, voice)))
 
         if tasks:
