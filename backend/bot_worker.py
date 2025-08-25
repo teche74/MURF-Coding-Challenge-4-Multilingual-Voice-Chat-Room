@@ -47,8 +47,8 @@ class Bot:
         self.buffers: dict[str, bytearray] = defaultdict(bytearray)
         self.sr: dict[str, int] = defaultdict(lambda: self.DEFAULT_SR)
         self.ch: dict[str, int] = defaultdict(lambda: self.DEFAULT_CH)
-        self.last_voice_time: dict[str, float] = {}   # last non-silent frame timestamp
-        self.last_flush_time: dict[str, float] = {}   # last time we flushed a chunk
+        self.last_voice_time: dict[str, float] = {}
+        self.last_flush_time: dict[str, float] = {}
 
     async def start(self):
         if rtc is None:
@@ -63,11 +63,7 @@ class Bot:
                 return
             if track.kind == rtc.TrackKind.KIND_AUDIO:
                 log.info("bot[%s] subscribed to %s", self.room_code, participant.identity)
-
-                def _on_frame(frame: rtc.AudioFrame):
-                    asyncio.create_task(self._ingest_frame(frame, participant.identity))
-
-                track.on("frame_received", _on_frame)
+                asyncio.create_task(self._consume_audio(track, participant.identity))
 
         self.client.on("track_subscribed", _on_subscribed)
 
@@ -82,12 +78,16 @@ class Bot:
         self.closed.set()
         log.info("bot[%s] stopped", self.room_code)
 
+    async def _consume_audio(self, remote_audio: rtc.RemoteAudioTrack, speaker_id: str):
+        """Consume frames from LiveKit RemoteAudioTrack via stream()."""
+        try:
+            stream = await remote_audio.stream()
+            async for frame in stream:
+                await self._ingest_frame(frame, speaker_id)
+        except Exception as e:
+            log.error("Error consuming audio for %s: %s", speaker_id, e, exc_info=True)
+
     async def _ingest_frame(self, frame: "rtc.AudioFrame", speaker_id: str):
-        """
-        Collect frames into ~speech chunks; flush:
-          - when enough audio gathered (MAX_CHUNK_MS)
-          - or when we detect sustained silence for SILENCE_HOLD_MS
-        """
         now = time.time()
         sr = getattr(frame, "sample_rate", self.DEFAULT_SR)
         ch = getattr(frame, "num_channels", self.DEFAULT_CH)
@@ -123,7 +123,6 @@ class Bot:
             await self._flush_buffer(speaker_id)
 
     def _bytes_to_ms(self, nbytes: int, sr: int, ch: int) -> float:
-
         if sr <= 0 or ch <= 0:
             sr = self.DEFAULT_SR
             ch = self.DEFAULT_CH
@@ -132,7 +131,6 @@ class Bot:
         return ms
 
     async def _flush_buffer(self, speaker_id: str):
-        """Copy + clear to avoid blocking ingestion; process chunk asynchronously."""
         buf = self.buffers[speaker_id]
         if not buf:
             return
@@ -143,15 +141,9 @@ class Bot:
         buf.clear()
 
         self.last_flush_time[speaker_id] = time.time()
-
         asyncio.create_task(self._process_chunk(pcm_bytes, speaker_id, sr, ch))
 
     async def _process_chunk(self, pcm_bytes: bytes, speaker_id: str, sr: int, ch: int):
-        """
-        Emulates streaming STT using short chunks through your existing Murf pipeline:
-          - First pass: STT only (target=None, voice=None)
-          - Fan-out per listener: translation + TTS
-        """
         try:
             recognized, _, _ = await asyncio.to_thread(
                 process_audio_pipeline, pcm_bytes, "auto", None, None
@@ -172,7 +164,6 @@ class Bot:
                 _, _, tts_bytes = await asyncio.to_thread(
                     process_audio_pipeline, pcm_bytes, "auto", target_lang, voice
                 )
-
                 if tts_bytes:
                     log.info(
                         "bot[%s] queueing TTS for %s lang=%s voice=%s",
@@ -199,7 +190,6 @@ class Bot:
                 self.playback_queues[user_id].task_done()
 
     async def _play_tts_bytes(self, user_id: str, tts_bytes: bytes):
-        """Publish an audio track per listener and write frames sequentially."""
         try:
             track_name = f"bot_audio_{self.room_code}_{user_id}"
             if track_name not in self.audio_sources:
@@ -215,8 +205,7 @@ class Bot:
             raw = audio.raw_data
             samples = np.frombuffer(raw, dtype=np.int16)
 
-            # 20ms frames @ 48kHz mono: 960 samples
-            frame_size = 960
+            frame_size = 960  # 20ms @ 48kHz mono
             for i in range(0, len(samples), frame_size):
                 chunk = samples[i:i + frame_size]
                 if len(chunk) < frame_size:
@@ -227,7 +216,7 @@ class Bot:
                     num_channels=self.DEFAULT_CH,
                 )
                 self.audio_sources[track_name].capture_frame(frame)
-                await asyncio.sleep(0.02)  
+                await asyncio.sleep(0.02)
 
         except Exception as e:
             log.error("TTS playback failed for %s: %s", user_id, e, exc_info=True)
