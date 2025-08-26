@@ -130,9 +130,9 @@ class TranslatorAgent(Agent):
         # semaphore limits concurrent TTS tasks
         self._tts_sema = asyncio.Semaphore(MAX_CONCURRENT_TTS)
 
-    async def on_enter(self, session: AgentSession):
+    async def on_enter(self):
         logger.info("[agent] joined session")
-        await session.subscribe_all()
+        await self.session.subscribe_all()
         try:
             voice = get_default_voice("hi-IN")
             tts_blob = await asyncio.to_thread(
@@ -260,6 +260,7 @@ class RoomBotHandle:
         # start agent session with room so RoomIO is created
         try:
             await self._session.start(agent=self._agent, room=self._room)
+            self._agent.session = self._session 
             logger.info("[bot] AgentSession started for room %s", self.room_code)
         except Exception:
             logger.exception("[bot] AgentSession.start failed for room %s", self.room_code)
