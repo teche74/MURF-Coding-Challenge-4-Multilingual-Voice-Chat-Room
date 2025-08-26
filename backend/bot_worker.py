@@ -132,7 +132,6 @@ class TranslatorAgent(Agent):
 
     async def on_enter(self):
         logger.info("[agent] joined session")
-        await self.session.subscribe_all()
         try:
             voice = get_default_voice("hi-IN")
             tts_blob = await asyncio.to_thread(
@@ -260,7 +259,6 @@ class RoomBotHandle:
         # start agent session with room so RoomIO is created
         try:
             await self._session.start(agent=self._agent, room=self._room)
-            self._agent.session = self._session 
             logger.info("[bot] AgentSession started for room %s", self.room_code)
         except Exception:
             logger.exception("[bot] AgentSession.start failed for room %s", self.room_code)
