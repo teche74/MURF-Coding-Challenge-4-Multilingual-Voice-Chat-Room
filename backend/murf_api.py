@@ -142,6 +142,7 @@ def speech_to_text_murf(audio_bytes, sample_rate=16000, language="hi-IN"):
         format="wav",
         language=language
     )
+    logger.info("STT: received %d bytes, sample_rate=%s, language=%s", len(audio_bytes), sample_rate, language)
     return response.get("text", "")
 
 # -----------------------
@@ -162,6 +163,7 @@ import requests
 logger = logging.getLogger("murf_pipeline")
 
 def generate_speech_from_text(text, language="en-US", voice=None):
+    logger.info("Murf TTS response type: %s", type(response))
     if not voice:
         voice = get_default_voice(language)
 
@@ -206,6 +208,7 @@ def generate_speech_from_text(text, language="en-US", voice=None):
 
     # If nothing matched
     logger.error("Unsupported Murf TTS response: %s", response)
+    logger.info("Murf TTS response type: %s", type(response))
     raise RuntimeError("Unsupported Murf TTS response shape")
 
 # -----------------------

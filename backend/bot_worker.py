@@ -160,18 +160,18 @@ class TranslatorAgent(Agent):
         async with self._tts_sema:
             try:
                 translated = await asyncio.to_thread(translate_text_murf, recognized_text, target_language=to_lang)
+                logger.info("[agent] translated for %s -> %s : %r", target_id, to_lang, translated)
                 if not translated:
                     logger.warning("[agent] empty translation for target %s", target_id)
                     return
 
                 tts_blob = await asyncio.to_thread(generate_speech_from_text, translated, language=to_lang, voice=voice)
+                logger.info("[agent] tts bytes len for %s : %s", target_id, len(tts_blob) if tts_blob else "None")
                 if not tts_blob:
                     logger.warning("[agent] empty TTS blob for target %s", target_id)
                     return
 
-                # stream audio back to room
                 audio_iter = _bytes_to_audio_frames_async(tts_blob, sample_rate=44100, channels=1, frame_ms=FRAME_MS)
-                # say supports audio iterator; text can be empty when streaming audio
                 try:
                     await self.session.say("", audio=audio_iter)
                 except Exception:
@@ -186,9 +186,9 @@ class TranslatorAgent(Agent):
         speaker_pref = self.user_prefs.get(speaker_id, {"language": "hi-IN", "voice": get_default_voice("hi-IN")})
         speaker_lang = speaker_pref.get("language", "en-US")
 
-        # STT (blocking) -> run in thread
         try:
             recognized = await asyncio.to_thread(speech_to_text_murf, pcm_bytes, sample_rate, speaker_lang)
+            logger.info("[agent] STT result for %s: %r", speaker_id, recognized)
         except Exception:
             logger.exception("[agent] STT failed for speaker %s", speaker_id)
             return
@@ -197,7 +197,6 @@ class TranslatorAgent(Agent):
             logger.debug("[agent] no text recognized for speaker %s", speaker_id)
             return
 
-        # fan out - spawn tasks for each listener (except speaker)
         tasks = []
         for target_id, pref in self.user_prefs.items():
             if target_id == speaker_id:

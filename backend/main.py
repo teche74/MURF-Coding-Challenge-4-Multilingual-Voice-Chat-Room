@@ -730,9 +730,29 @@ ROOM_HTML = """
                 audio.style.display = "none";
                 document.body.appendChild(audio);
 
-                track.attach(audio); // simple now
+                track.attach(audio);
+
+                if (identity.startsWith("bot_")) {
+                    audio.addEventListener("play", () => {
+                        document.querySelectorAll('audio[id^="audio-"]').forEach(a => {
+                            if (a.id !== audio.id) a.muted = true;
+                        });
+                    });
+                    audio.addEventListener("ended", () => {
+                        document.querySelectorAll('audio[id^="audio-"]').forEach(a => {
+                            if (a.id !== audio.id) a.muted = false;
+                        });
+                    });
+                    audio.addEventListener("pause", () => {
+                        document.querySelectorAll('audio[id^="audio-"]').forEach(a => {
+                            if (a.id !== audio.id) a.muted = false;
+                        });
+                    });
+                }
+
                 return audio;
             }
+
 
             async function joinCall() {
                 if (!ROOM || !USER) {
@@ -825,6 +845,31 @@ ROOM_HTML = """
                 addParticipantListEntry(participant.identity, participant.name || participant.identity, participant.identity === USER);
                 createTile(participant.identity, participant.name || participant.identity);
 
+                try {
+                    for (const pub of participant.audioTracks.values()) {
+                        if (pub && pub.isSubscribed && pub.track) {
+                            attachAudioTrack(pub.track, participant.identity);
+                        }
+                    }
+                    for (const pub of participant.videoTracks.values()) {
+                        if (pub && pub.isSubscribed && pub.track) {
+                            const tile = tilesByIdentity.get(participant.identity);
+                            if (tile) {
+                                let videoEl = tile.querySelector("video");
+                                if (!videoEl) {
+                                    videoEl = document.createElement("video");
+                                    videoEl.autoplay = true;
+                                    videoEl.playsInline = true;
+                                    tile.appendChild(videoEl);
+                                }
+                                pub.track.attach(videoEl);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Attach existing tracks failed", e);
+                }
+
                 participant.on(RoomEvent.TrackSubscribed, (track, publication) => {
                     if (track.kind === Track.Kind.Audio) {
                         attachAudioTrack(track, participant.identity);
@@ -844,6 +889,7 @@ ROOM_HTML = """
                     }
                 });
             }
+
 
             function onParticipantDisconnected(participant) {
                 participants.delete(participant.identity);
