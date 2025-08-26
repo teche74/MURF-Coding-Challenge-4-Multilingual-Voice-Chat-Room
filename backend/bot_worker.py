@@ -56,8 +56,8 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 
 # tuneables
-SILENCE_THRESHOLD = 500  # RMS threshold for silence detection (tune for your audio)
-SILENCE_SECONDS_TO_END = 0.7  # how long silence to wait before treating as end-of-turn
+SILENCE_THRESHOLD = 100  # RMS threshold for silence detection (tune for your audio)
+SILENCE_SECONDS_TO_END = 0.5  # how long silence to wait before treating as end-of-turn
 MIN_SPEECH_BYTES = 16000 * 2 // 5  # ~0.2s of 16kHz 16-bit mono
 MAX_CONCURRENT_TTS = 3  # limit concurrent TTS calls to avoid API throttling
 FRAME_MS = 20  # output TTS frame size when streaming back into LiveKit
@@ -130,8 +130,9 @@ class TranslatorAgent(Agent):
         # semaphore limits concurrent TTS tasks
         self._tts_sema = asyncio.Semaphore(MAX_CONCURRENT_TTS)
 
-    async def on_enter(self):
+    async def on_enter(self, session: AgentSession):
         logger.info("[agent] joined session")
+        await session.subscribe_all()
         try:
             voice = get_default_voice("hi-IN")
             tts_blob = await asyncio.to_thread(
@@ -303,6 +304,8 @@ class RoomBotHandle:
                 window_bytes = buffer[-(int(0.2 * sr) * 2) :]
                 rms = _rms_of_pcm16(bytes(window_bytes))
 
+                logger.debug("[bot] frame received: rms=%d, buffer_len=%d", rms, len(buffer))
+
                 if rms > SILENCE_THRESHOLD:
                     last_voice_time = time.time()
 
@@ -310,6 +313,8 @@ class RoomBotHandle:
                 if len(buffer) >= (sr * 2 * 1) or (time.time() - last_voice_time) > SILENCE_SECONDS_TO_END:
                     pcm_snapshot = bytes(buffer)
                     buffer.clear()
+
+                    logger.debug("[bot] silence detected, ending chunk, sending to STT")
                     # run processing but don't block reader loop
                     asyncio.create_task(self._process_speech_chunk(pcm_snapshot, sr, participant.identity))
 

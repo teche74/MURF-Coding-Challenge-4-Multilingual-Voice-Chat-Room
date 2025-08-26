@@ -187,7 +187,11 @@ def generate_speech_from_text(text, language="en-US", voice=None):
     if isinstance(response, dict) and "audio" in response:
         audio_obj = response["audio"]
         if isinstance(audio_obj, dict) and "data" in audio_obj:
-            return base64.b64decode(audio_obj["data"])
+            try:
+                return base64.b64decode(audio_obj["data"])
+            except Exception:
+                logger.exception("Failed to base64 decode audio data")
+                raise
 
     # SDK object variants
     for attr in ("content", "audio", "audio_bytes", "data", "encoded_audio"):
@@ -200,12 +204,17 @@ def generate_speech_from_text(text, language="en-US", voice=None):
                     try:
                         return base64.b64decode(blob)
                     except Exception:
-                        pass
+                        logger.debug("Attribute %s not base64: %r", attr, blob[:50])
+                        continue
 
     if hasattr(response, "audio_file") and response.audio_file:
-        r = requests.get(response.audio_file, timeout=10)
-        r.raise_for_status()
-        return r.content
+        try:
+            r = requests.get(response.audio_file, timeout=10)
+            r.raise_for_status()
+            return r.content
+        except Exception:
+            logger.exception("Failed fetching audio from signed URL")
+            raise
 
     logger.error("Unsupported Murf TTS response: %r", response)
     raise RuntimeError("Unsupported Murf TTS response shape")
