@@ -732,6 +732,13 @@ ROOM_HTML = """
 
                 track.attach(audio);
 
+                const tryPlay = () => {
+                    audio.play().catch(() => {
+                        showAudioNudge();
+                    });
+                };
+                tryPlay();
+
                 if (identity.startsWith("bot_")) {
                     audio.addEventListener("play", () => {
                         document.querySelectorAll('audio[id^="audio-"]').forEach(a => {
@@ -752,6 +759,27 @@ ROOM_HTML = """
 
                 return audio;
             }
+
+            let audioNudgeShown = false;
+            function showAudioNudge() {
+                if (audioNudgeShown) return;
+                audioNudgeShown = true;
+                const btn = document.createElement('button');
+                btn.textContent = "🔊 Tap to enable audio";
+                btn.style = "position:fixed;bottom:12px;left:12px;z-index:9999;padding:6px 12px;";
+                btn.onclick = () => {
+                    document.querySelectorAll('audio').forEach(a => a.play().catch(() => { }));
+                    if (window.AudioContext) {
+                        try {
+                            const ac = new AudioContext();
+                            if (ac.state === "suspended") ac.resume();
+                        } catch { }
+                    }
+                    btn.remove();
+                };
+                document.body.appendChild(btn);
+            }
+
 
 
             async function joinCall() {

@@ -163,53 +163,53 @@ import requests
 logger = logging.getLogger("murf_pipeline")
 
 def generate_speech_from_text(text, language="en-US", voice=None):
-    logger.info("Murf TTS response type: %s", type(response))
     if not voice:
         voice = get_default_voice(language)
 
     logger.info("TTS start: lang=%s, voice=%s", language, voice)
-    response = client.text_to_speech.generate(
-        text=text,
-        voice_id=voice,
-        format="MP3",
-        sample_rate=44100.0,
-    )
+    response = None
+    try:
+        response = client.text_to_speech.generate(
+            text=text,
+            voice_id=voice,
+            format="MP3",
+            sample_rate=44100.0,
+        )
+    except Exception:
+        logger.exception("Murf TTS generate() failed")
+        raise
 
-    # Case 1: Murf returns raw bytes directly
+    # bytes directly
     if isinstance(response, (bytes, bytearray)):
         return bytes(response)
 
-    # Case 2: Murf returns dict with inline base64
-    if isinstance(response, dict):
-        if "audio" in response:
-            audio_obj = response["audio"]
-            if isinstance(audio_obj, dict) and "data" in audio_obj:
-                return base64.b64decode(audio_obj["data"])
+    # dict with base64
+    if isinstance(response, dict) and "audio" in response:
+        audio_obj = response["audio"]
+        if isinstance(audio_obj, dict) and "data" in audio_obj:
+            return base64.b64decode(audio_obj["data"])
 
-    # Case 3: Murf returns object with attributes (SDK style)
+    # SDK object variants
     for attr in ("content", "audio", "audio_bytes", "data", "encoded_audio"):
         if hasattr(response, attr):
             blob = getattr(response, attr)
             if blob:
                 if isinstance(blob, (bytes, bytearray)):
                     return bytes(blob)
-                if isinstance(blob, str):  # base64 encoded string
+                if isinstance(blob, str):
                     try:
                         return base64.b64decode(blob)
                     except Exception:
                         pass
 
-    # Case 4: Murf returns signed audio file URL
     if hasattr(response, "audio_file") and response.audio_file:
-        logger.info("Downloading Murf audio from URL: %s", response.audio_file)
         r = requests.get(response.audio_file, timeout=10)
         r.raise_for_status()
         return r.content
 
-    # If nothing matched
-    logger.error("Unsupported Murf TTS response: %s", response)
-    logger.info("Murf TTS response type: %s", type(response))
+    logger.error("Unsupported Murf TTS response: %r", response)
     raise RuntimeError("Unsupported Murf TTS response shape")
+
 
 # -----------------------
 # Full pipeline: STT → Translate → TTS
