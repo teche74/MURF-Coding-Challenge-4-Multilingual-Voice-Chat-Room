@@ -325,36 +325,43 @@ class RoomBotHandle:
             return
         
         @self._room.on("track_published")
-        async def _on_track_published(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-            try:
-                if publication.kind == rtc.TrackKind.KIND_AUDIO:  # 👈 only audio
-                    self._lg.debug("[bot.on] subscribing to audio track of %s", participant.identity)
-                    await publication.subscribe()
-                else:
-                    self._lg.debug(
-                        "[bot.on] ignoring non-audio track kind=%s from %s",
-                        publication.kind.name,  # logs "VIDEO" or "DATA"
-                        participant.identity,
-                    )
-            except Exception:
-                self._lg.exception("[bot.on] exception in track_published handler")
+        def _on_track_published(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+            async def handle():
+                try:
+                    if publication.kind == rtc.TrackKind.KIND_AUDIO:  # 👈 only audio
+                        self._lg.debug("[bot.on] subscribing to audio track of %s", participant.identity)
+                        await publication.subscribe()
+                    else:
+                        self._lg.debug(
+                            "[bot.on] ignoring non-audio track kind=%s from %s",
+                            publication.kind.name,  # logs "VIDEO" or "DATA"
+                            participant.identity,
+                        )
+                except Exception:
+                    self._lg.exception("[bot.on] exception in track_published handler")
+                
+            asyncio.create_task(handle())
 
         # hook: when audio track subscribed
         @self._room.on("track_subscribed")
-        async def _on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-            try:
-                if track.kind != rtc.TrackKind.KIND_AUDIO:
-                    self._lg.debug("[bot.on] non-audio track subscribed -> ignoring")
-                    return
+        def _on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+            async def handle():
+                try:
+                    if track.kind != rtc.TrackKind.KIND_AUDIO:
+                        self._lg.debug("[bot.on] non-audio track subscribed -> ignoring")
+                        return
 
-                self._lg.info("[bot.on] audio track subscribed from %s", participant.identity)
+                    self._lg.info("[bot.on] audio track subscribed from %s", participant.identity)
 
-                # Use the silence-based reader loop
-                asyncio.create_task(self._read_track_loop(track, participant))
+                    # Use the silence-based reader loop
+                    asyncio.create_task(self._read_track_loop(track, participant))
 
-            except Exception:
-                self._lg.exception("[bot.on] exception in track_subscribed handler")
+                except Exception:
+                    self._lg.exception("[bot.on] exception in track_subscribed handler")
+            
+            asyncio.create_task(handle())
 
+    
     async def _read_track_loop(self, track, participant):
         """Read audio chunks from a subscribed track and detect end-of-turn via simple silence-based logic."""
         self._lg.info("[bot] started reader for participant %s", getattr(participant, "identity", "<unknown>"))
