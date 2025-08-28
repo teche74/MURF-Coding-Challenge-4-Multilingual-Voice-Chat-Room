@@ -300,7 +300,10 @@ class RoomBotHandle:
         self._room = rtc.Room()
         try:
             self._lg.debug("[bot] connecting to LiveKit url=%s", self.url)
-            await self._room.connect(self.url, token)
+            await self._room.connect(self.url, 
+            token,
+            options=rtc.RoomOptions(auto_subscribe=False) 
+            )
             self._lg.info("[bot] connected to room %s", getattr(self._room, "name", self.room_code))
         except Exception:
             self._lg.exception("[bot] failed to connect room %s", self.room_code)
@@ -320,24 +323,37 @@ class RoomBotHandle:
                 pass
             self._room = None
             return
+        
+        @self._room.on("track_published")
+        async def _on_track_published(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+            try:
+                if publication.kind == rtc.TrackKind.KIND_AUDIO:  # 👈 only audio
+                    self._lg.debug("[bot.on] subscribing to audio track of %s", participant.identity)
+                    await publication.subscribe()
+                else:
+                    self._lg.debug(
+                        "[bot.on] ignoring non-audio track kind=%s from %s",
+                        publication.kind.name,  # logs "VIDEO" or "DATA"
+                        participant.identity,
+                    )
+            except Exception:
+                self._lg.exception("[bot.on] exception in track_published handler")
 
         # hook: when audio track subscribed
         @self._room.on("track_subscribed")
-        def _on_track_subscribed(track, publication, participant):
+        async def _on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
             try:
-                self._lg.debug("[bot.on] track_subscribed event: kind=%s participant=%s", getattr(track, 'kind', None), getattr(participant, 'identity', None))
-                # spawn a reader task
-                if getattr(track, "kind", None) != "audio":
+                if track.kind != rtc.TrackKind.KIND_AUDIO:
                     self._lg.debug("[bot.on] non-audio track subscribed -> ignoring")
                     return
 
-                t = asyncio.create_task(self._read_track_loop(track, participant))
-                self._tasks.append(t)
-                self._lg.info("[bot.on] spawned reader task for participant %s", getattr(participant, 'identity', None))
+                self._lg.info("[bot.on] audio track subscribed from %s", participant.identity)
+
+                # Use the silence-based reader loop
+                asyncio.create_task(self._read_track_loop(track, participant))
+
             except Exception:
                 self._lg.exception("[bot.on] exception in track_subscribed handler")
-
-        self._lg.info("[bot] ready and listening in room %s", self.room_code)
 
     async def _read_track_loop(self, track, participant):
         """Read audio chunks from a subscribed track and detect end-of-turn via simple silence-based logic."""
