@@ -99,5 +99,7 @@ transformer
 livekit-agents
 torch
 soundfile
-torch torchvision torchaudio
+torch 
+torchvision 
+torchaudio
 transformers
