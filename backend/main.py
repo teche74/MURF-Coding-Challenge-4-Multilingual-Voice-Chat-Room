@@ -638,6 +638,7 @@ ROOM_HTML = """
             const ROOM = qs.get("room_code") || "";
             const USER = qs.get("user_id") || "";
             const MY_LANG = qs.get("lang") || "";
+            const LIVEKIT_IDENTITY = USER + "-" + Math.random().toString(36).slice(2, 8);
             document.getElementById('roomName').innerText = ROOM || "[unknown]";
 
             const TOKEN_ENDPOINT = BACKEND_URL + "/livekit/join-token";
@@ -730,6 +731,10 @@ ROOM_HTML = """
                 audio.style.display = "none";
                 document.body.appendChild(audio);
 
+                if (identity === LIVEKIT_IDENTITY) {
+                    audio.muted = true;
+                }
+
                 track.attach(audio);
 
                 const tryPlay = () => {
@@ -793,7 +798,7 @@ ROOM_HTML = """
                     tokenResp = await fetch(TOKEN_ENDPOINT, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ room_code: ROOM, user_id: USER, name: USER, language: preferredLanguage })
+                        body: JSON.stringify({ room_code: ROOM, user_id: LIVEKIT_IDENTITY, name: USER, language: preferredLanguage })
                     });
                 } catch (e) {
                     console.error("Token fetch failed", e);
