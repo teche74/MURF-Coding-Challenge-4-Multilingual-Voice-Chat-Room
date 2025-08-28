@@ -95,8 +95,9 @@ wsproto==1.2.0
 yarl==1.20.1
 livekit-api 
 livekit
-vosk
+transformer
 livekit-agents
-openai-whisper
+torch
 soundfile
-setuptools-rust
+torch torchvision torchaudio
+transformers
