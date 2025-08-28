@@ -1,20 +1,15 @@
 """
 Improved LiveKit Translator bot worker (backend/bot_worker.py).
 
+This variant includes comprehensive end-to-end logging to aid debugging.
+
 Key features:
-- Correct AgentSession usage (connect rtc.Room with token, then start AgentSession with room=room).
-- Per-participant audio reader with simple silence-based VAD to detect end-of-turn.
-- Uses asyncio.to_thread() for blocking Murf SDK calls (STT/Translate/TTS).
-- Concurrency limit (Semaphore) for TTS tasks to avoid overloading Murf.
-- Robust start/stop lifecycle with logging and error handling.
+- Detailed DEBUG logs at every major step, including token minting, LiveKit connect, AgentSession start,
+  track subscription, audio chunk reception, RMS values, STT/Translate/TTS steps and frame streaming.
+- Contextual child loggers per room/bot identity to filter logs per-room easily.
+- Safeguards: MIN_SPEECH_BYTES check before STT, try/except around likely failure points.
 
-Dependencies:
-- livekit (python SDK with agents + rtc)
-- pydub (+ ffmpeg installed on machine)
-- murf SDK (your existing backend.murf_api module)
-
-Drop this file into your `backend/` folder and ensure your FastAPI app imports `ensure_room_bot`/`stop_room_bot` from here.
-
+Drop this file into your `backend/` folder replacing the previous worker file.
 """
 
 import asyncio
@@ -44,8 +39,18 @@ from backend.murf_api import (
     get_default_voice,
 )
 
+# --------------------------
+# logging setup (verbose by default for debugging)
+# --------------------------
 logger = logging.getLogger("bot")
-logger.setLevel(logging.INFO)
+# attach a stream handler if none exists so logs appear in stdout when run under uvicorn etc.
+if not logger.handlers:
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s - %(message)s')
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+logger.setLevel(logging.DEBUG)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV = os.path.join(os.path.dirname(BASE_DIR), ".env")
@@ -71,8 +76,6 @@ def _rms_of_pcm16(pcm_bytes: bytes) -> float:
     """Compute a quick RMS of int16 PCM bytes."""
     if not pcm_bytes:
         return 0.0
-    # iterate over 16-bit little-endian samples
-    # use struct to unpack in chunks to avoid huge memory churn
     count = len(pcm_bytes) // 2
     if count == 0:
         return 0.0
@@ -97,10 +100,21 @@ async def _bytes_to_audio_frames_async(audio_bytes: bytes, sample_rate: int = 44
 
     Note: uses pydub to decode the container. pydub requires ffmpeg in PATH.
     """
+    logger.debug("[tts.frames] starting decode: bytes=%d, sample_rate=%s, channels=%s, frame_ms=%s",
+                 len(audio_bytes) if audio_bytes else 0, sample_rate, channels, frame_ms)
     # decode to PCM using pydub
-    audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
-    audio = audio.set_frame_rate(sample_rate).set_channels(channels).set_sample_width(2)  # 16-bit
-    raw = audio.raw_data
+    try:
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+    except Exception as e:
+        logger.exception("[tts.frames] pydub failed to decode TTS bytes")
+        raise
+
+    try:
+        audio = audio.set_frame_rate(sample_rate).set_channels(channels).set_sample_width(2)  # 16-bit
+        raw = audio.raw_data
+    except Exception as e:
+        logger.exception("[tts.frames] failed to normalize audio: %s", e)
+        raise
 
     bytes_per_sample = 2
     samples_per_ms = sample_rate / 1000.0
@@ -109,15 +123,19 @@ async def _bytes_to_audio_frames_async(audio_bytes: bytes, sample_rate: int = 44
 
     idx = 0
     total = len(raw)
+    frame_count = 0
     while idx < total:
         chunk = raw[idx : idx + bytes_per_chunk]
         if len(chunk) < bytes_per_chunk:
             chunk = chunk + (b"\x00" * (bytes_per_chunk - len(chunk)))
         frame = AudioFrame(chunk, sample_rate, channels, samples_per_chunk)
+        frame_count += 1
+        logger.debug("[tts.frames] yielding frame %d (bytes=%d)", frame_count, len(chunk))
         yield frame
         idx += bytes_per_chunk
         # give control back to loop
         await asyncio.sleep(0)
+    logger.debug("[tts.frames] finished yielding %d frames", frame_count)
 
 
 # --------------------------
@@ -134,15 +152,21 @@ class TranslatorAgent(Agent):
         logger.info("[agent] joined session")
         try:
             voice = get_default_voice("hi-IN")
+            logger.debug("[agent] generating join announcement TTS (voice=%s)", voice)
             tts_blob = await asyncio.to_thread(
                 generate_speech_from_text,
                 "Translator bot has joined the room.",
                 language="hi-IN",
                 voice=voice
             )
+            logger.debug("[agent] join TTS blob len=%s", len(tts_blob) if tts_blob else None)
             if tts_blob:
                 audio_iter = _bytes_to_audio_frames_async(tts_blob, sample_rate=44100, channels=1, frame_ms=FRAME_MS)
-                await self.session.say("", audio=audio_iter)
+                try:
+                    await self.session.say("", audio=audio_iter)
+                    logger.info("[agent] announced join message via session.say()")
+                except Exception:
+                    logger.exception("[agent] failed to say announcement audio on enter")
         except Exception:
             logger.exception("[agent] failed to announce on enter")
     
@@ -157,6 +181,7 @@ class TranslatorAgent(Agent):
     async def _translate_and_play_for_target(self, recognized_text: str, from_lang: str, target_id: str, to_lang: str, voice: str):
         """Translate recognized_text to to_lang, synthesize audio and stream into session.say(audio=...)."""
         # throttle concurrent TTS calls
+        logger.debug("[agent] translate_and_play start: target=%s, to_lang=%s, voice=%s", target_id, to_lang, voice)
         async with self._tts_sema:
             try:
                 translated = await asyncio.to_thread(translate_text_murf, recognized_text, target_language=to_lang)
@@ -173,7 +198,9 @@ class TranslatorAgent(Agent):
 
                 audio_iter = _bytes_to_audio_frames_async(tts_blob, sample_rate=44100, channels=1, frame_ms=FRAME_MS)
                 try:
+                    logger.debug("[agent] calling session.say() for target %s", target_id)
                     await self.session.say("", audio=audio_iter)
+                    logger.info("[agent] successfully streamed audio for target %s", target_id)
                 except Exception:
                     logger.exception("[agent] failed to say audio for target %s", target_id)
             except Exception:
@@ -181,12 +208,21 @@ class TranslatorAgent(Agent):
 
     async def handle_speech_chunk(self, pcm_bytes: bytes, sample_rate: int, speaker_id: str):
         """Take a completed speech chunk (PCM16LE bytes) and fan-out translations to other participants."""
+        logger.debug("[agent] handle_speech_chunk called: speaker=%s bytes=%d sample_rate=%s", speaker_id, len(pcm_bytes) if pcm_bytes else 0, sample_rate)
         if not pcm_bytes:
+            logger.debug("[agent] empty pcm_bytes for %s - skipping", speaker_id)
             return
+
         speaker_pref = self.user_prefs.get(speaker_id, {"language": "hi-IN", "voice": get_default_voice("hi-IN")})
         speaker_lang = speaker_pref.get("language", "en-US")
 
+        # ensure chunk meets minimum size expectation
+        if len(pcm_bytes) < MIN_SPEECH_BYTES:
+            logger.debug("[agent] pcm_bytes too small (%d < %d) - skipping STT", len(pcm_bytes), MIN_SPEECH_BYTES)
+            return
+
         try:
+            logger.debug("[agent] calling STT for speaker=%s (lang=%s)", speaker_id, speaker_lang)
             recognized = await asyncio.to_thread(speech_to_text_murf, pcm_bytes, sample_rate, speaker_lang)
             logger.info("[agent] STT result for %s: %r", speaker_id, recognized)
         except Exception:
@@ -203,10 +239,13 @@ class TranslatorAgent(Agent):
                 continue
             to_lang = pref.get("language", "hi-IN")
             voice = pref.get("voice") or get_default_voice(to_lang)
+            logger.debug("[agent] queuing translation for target=%s to_lang=%s", target_id, to_lang)
             tasks.append(asyncio.create_task(self._translate_and_play_for_target(recognized, speaker_lang, target_id, to_lang, voice)))
 
         if tasks:
+            logger.debug("[agent] awaiting %d translation tasks for speaker=%s", len(tasks), speaker_id)
             await asyncio.gather(*tasks, return_exceptions=True)
+            logger.debug("[agent] translation tasks completed for speaker=%s", speaker_id)
 
 
 # --------------------------
@@ -221,11 +260,15 @@ class RoomBotHandle:
         self._agent = TranslatorAgent()
         self._session = AgentSession()
         self.identity = f"bot_{room_code}"
+        # create a child logger for contextual logs per-room/bot
+        self._lg = logger.getChild(self.identity)
         self._room: Optional[rtc.Room] = None
         self._tasks: List[asyncio.Task] = []
         self._closed = False
+        self._lg.debug("RoomBotHandle initialized")
 
     def _mint_token(self) -> str:
+        self._lg.debug("_mint_token called")
         at = (
             AccessToken(self.api_key, self.api_secret)
             .with_identity(self.identity)
@@ -240,28 +283,37 @@ class RoomBotHandle:
                 )
             )
         )
-        return at.to_jwt()
+        token = at.to_jwt()
+        self._lg.debug("_mint_token produced token length=%d", len(token) if token else 0)
+        return token
 
     async def start(self):
-        logger.info("[bot] starting for room %s", self.room_code)
-        token = self._mint_token()
+        self._lg.info("[bot] starting for room %s", self.room_code)
+        token = None
+        try:
+            token = self._mint_token()
+        except Exception:
+            self._lg.exception("[bot] token minting failed for room %s", self.room_code)
+            return
 
         # create & connect room
         self._room = rtc.Room()
         try:
+            self._lg.debug("[bot] connecting to LiveKit url=%s", self.url)
             await self._room.connect(self.url, token)
-            logger.info("[bot] connected to room %s", getattr(self._room, "name", self.room_code))
+            self._lg.info("[bot] connected to room %s", getattr(self._room, "name", self.room_code))
         except Exception:
-            logger.exception("[bot] failed to connect room %s", self.room_code)
+            self._lg.exception("[bot] failed to connect room %s", self.room_code)
             self._room = None
             return
 
         # start agent session with room so RoomIO is created
         try:
+            self._lg.debug("[bot] starting AgentSession")
             await self._session.start(agent=self._agent, room=self._room)
-            logger.info("[bot] AgentSession started for room %s", self.room_code)
+            self._lg.info("[bot] AgentSession started for room %s", self.room_code)
         except Exception:
-            logger.exception("[bot] AgentSession.start failed for room %s", self.room_code)
+            self._lg.exception("[bot] AgentSession.start failed for room %s", self.room_code)
             try:
                 await self._room.aclose()
             except Exception:
@@ -272,18 +324,24 @@ class RoomBotHandle:
         # hook: when audio track subscribed
         @self._room.on("track_subscribed")
         def _on_track_subscribed(track, publication, participant):
-            # spawn a reader task
-            if getattr(track, "kind", None) != "audio":
-                return
+            try:
+                self._lg.debug("[bot.on] track_subscribed event: kind=%s participant=%s", getattr(track, 'kind', None), getattr(participant, 'identity', None))
+                # spawn a reader task
+                if getattr(track, "kind", None) != "audio":
+                    self._lg.debug("[bot.on] non-audio track subscribed -> ignoring")
+                    return
 
-            t = asyncio.create_task(self._read_track_loop(track, participant))
-            self._tasks.append(t)
+                t = asyncio.create_task(self._read_track_loop(track, participant))
+                self._tasks.append(t)
+                self._lg.info("[bot.on] spawned reader task for participant %s", getattr(participant, 'identity', None))
+            except Exception:
+                self._lg.exception("[bot.on] exception in track_subscribed handler")
 
-        logger.info("[bot] ready and listening in room %s", self.room_code)
+        self._lg.info("[bot] ready and listening in room %s", self.room_code)
 
     async def _read_track_loop(self, track, participant):
         """Read audio chunks from a subscribed track and detect end-of-turn via simple silence-based logic."""
-        logger.info("[bot] started reader for participant %s", getattr(participant, "identity", "<unknown>"))
+        self._lg.info("[bot] started reader for participant %s", getattr(participant, "identity", "<unknown>"))
         buffer = bytearray()
         last_voice_time = time.time()
         sample_rate = 16000
@@ -298,12 +356,18 @@ class RoomBotHandle:
                     data = bytes(chunk)
                     sr = sample_rate
 
+                # defensive: ensure data is bytes
+                if not isinstance(data, (bytes, bytearray)):
+                    self._lg.warning("[bot.read] received non-bytes data (type=%s) - skipping", type(data))
+                    continue
+
                 buffer.extend(data)
                 # compute rms of last 200ms of buffer to check voice
                 window_bytes = buffer[-(int(0.2 * sr) * 2) :]
                 rms = _rms_of_pcm16(bytes(window_bytes))
 
-                logger.debug("[bot] frame received: rms=%d, buffer_len=%d", rms, len(buffer))
+                self._lg.debug("[bot.read] frame received participant=%s sr=%s chunk_len=%d buffer_len=%d rms=%.2f",
+                               getattr(participant, 'identity', None), sr, len(data), len(buffer), rms)
 
                 if rms > SILENCE_THRESHOLD:
                     last_voice_time = time.time()
@@ -313,49 +377,64 @@ class RoomBotHandle:
                     pcm_snapshot = bytes(buffer)
                     buffer.clear()
 
-                    logger.debug("[bot] silence detected, ending chunk, sending to STT")
+                    self._lg.debug("[bot.read] silence detected or max buffer reached, snapshot_len=%d, sending to STT", len(pcm_snapshot))
+                    # only process if snapshot is reasonably large
+                    if len(pcm_snapshot) < MIN_SPEECH_BYTES:
+                        self._lg.debug("[bot.read] snapshot too small (%d < %d) - ignoring", len(pcm_snapshot), MIN_SPEECH_BYTES)
+                        continue
+
                     # run processing but don't block reader loop
                     asyncio.create_task(self._process_speech_chunk(pcm_snapshot, sr, participant.identity))
 
         except Exception:
-            logger.exception("[bot] read loop failed for participant %s", getattr(participant, "identity", "<unknown>"))
+            self._lg.exception("[bot] read loop failed for participant %s", getattr(participant, "identity", "<unknown>"))
 
     async def _process_speech_chunk(self, pcm_bytes: bytes, sample_rate: int, speaker_id: str):
         # delegate to agent handler
+        self._lg.debug("[bot.proc] _process_speech_chunk called speaker=%s bytes=%d sample_rate=%s", speaker_id, len(pcm_bytes) if pcm_bytes else 0, sample_rate)
         try:
             await self._agent.handle_speech_chunk(pcm_bytes, sample_rate, speaker_id)
+            self._lg.debug("[bot.proc] agent.handle_speech_chunk completed for %s", speaker_id)
         except Exception:
-            logger.exception("[bot] processing speech chunk failed for %s", speaker_id)
+            self._lg.exception("[bot] processing speech chunk failed for %s", speaker_id)
 
     async def stop(self):
         if self._closed:
             return
         self._closed = True
-        logger.info("[bot] stopping for room %s", self.room_code)
+        self._lg.info("[bot] stopping for room %s", self.room_code)
         try:
             await self._session.aclose()
+            self._lg.debug("[bot] AgentSession closed")
         except Exception:
-            logger.exception("[bot] closing session failed")
+            self._lg.exception("[bot] closing session failed")
 
         if self._room:
             try:
                 await self._room.aclose()
+                self._lg.debug("[bot] room closed")
             except Exception:
-                logger.exception("[bot] closing room failed")
+                self._lg.exception("[bot] closing room failed")
             self._room = None
 
         # cancel background tasks
         for t in self._tasks:
             if not t.done():
-                t.cancel()
+                try:
+                    t.cancel()
+                except Exception:
+                    self._lg.exception("[bot] failed to cancel task")
         self._tasks.clear()
+        self._lg.info("[bot] stopped cleanup complete for room %s", self.room_code)
 
     async def set_user_pref(self, user_id: str, language: str, voice: Optional[str] = None):
         # update in agent
         try:
+            self._lg.debug("[bot] set_user_pref called: %s %s %s", user_id, language, voice)
             await self._agent.set_user_pref(user_id, language, voice)
+            self._lg.debug("[bot] set_user_pref completed for %s", user_id)
         except Exception:
-            logger.exception("[bot] set_user_pref failed for %s", user_id)
+            self._lg.exception("[bot] set_user_pref failed for %s", user_id)
 
 
 # --------------------------
@@ -366,15 +445,20 @@ _bots: Dict[str, RoomBotHandle] = {}
 
 async def ensure_room_bot(room_code: str, url: str, api_key: str, api_secret: str) -> RoomBotHandle:
     """Ensure a RoomBotHandle exists and is starting in background."""
+    logger.debug("ensure_room_bot called for %s", room_code)
     if room_code in _bots:
+        logger.debug("ensure_room_bot: existing bot found for %s", room_code)
         return _bots[room_code]
 
     bot = RoomBotHandle(room_code, url, api_key, api_secret)
     _bots[room_code] = bot
+    logger.info("ensure_room_bot: created bot handle for %s", room_code)
     # start as background task and log exceptions
     async def _starter():
         try:
+            logger.debug("_starter: starting bot.start() for %s", room_code)
             await bot.start()
+            logger.info("_starter: bot.start() completed for %s", room_code)
         except Exception:
             logger.exception("[bot] background start failed for %s", room_code)
 
@@ -383,10 +467,11 @@ async def ensure_room_bot(room_code: str, url: str, api_key: str, api_secret: st
 
 
 async def stop_room_bot(room_code: str):
+    logger.debug("stop_room_bot called for %s", room_code)
     bot = _bots.pop(room_code, None)
     if bot:
         await bot.stop()
         logger.info("[bot] stopped for room %s", room_code)
+    else:
+        logger.debug("stop_room_bot: no bot to stop for %s", room_code)
 
-
-# end of file

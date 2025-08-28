@@ -2,6 +2,8 @@ import os
 import io
 import wave
 import logging
+import base64
+import requests
 from pydub import AudioSegment
 from dotenv import load_dotenv
 from murf import Murf
@@ -25,8 +27,9 @@ if not MURF_API_KEY:
     raise RuntimeError("Please set MURF_API_KEY in your .env file or environment variables.")
 
 # Init Murf client
+logger.info("Initializing Murf client...")
 client = Murf(api_key=MURF_API_KEY)
-logger.info("Murf client initialized")
+logger.info("Murf client initialized successfully")
 
 # Cache for voices
 _voice_cache = None
@@ -58,15 +61,23 @@ LANGUAGE_CODE_MAP = {
 }
 
 
+# -----------------------
+# Helpers
+# -----------------------
 def normalize_language(code: str) -> str:
-    """Convert 2-letter code to Murf locale. Fallback to hi-IN."""
+    """Convert human language string or shorthand to Murf locale."""
     if not code:
+        logger.warning("No language code provided. Defaulting to hi-IN")
         return "hi-IN"
     if code in LANGUAGE_CODE_MAP:
+        logger.debug("Normalized %s -> %s", code, LANGUAGE_CODE_MAP[code])
         return LANGUAGE_CODE_MAP[code]
     if "-" in code:
+        logger.debug("Using provided language code: %s", code)
         return code
+    logger.warning("Unsupported language code '%s'. Defaulting to hi-IN", code)
     return "hi-IN"
+
 
 # -----------------------
 # Voice helpers
@@ -76,36 +87,49 @@ def get_available_voices(force_refresh: bool = False):
     global _voice_cache
     if _voice_cache is None or force_refresh:
         logger.info("Fetching available voices from Murf API...")
-        _voice_cache = client.text_to_speech.get_voices()
+        try:
+            _voice_cache = client.text_to_speech.get_voices()
+            logger.info("Retrieved %d voices from Murf API", len(_voice_cache))
+        except Exception:
+            logger.exception("Failed to fetch voices from Murf API")
+            raise
     return _voice_cache
 
 
 def get_default_voice(language: str) -> str:
-    """Return a valid default voice_id for a given language (locale like 'hi-IN')."""
+    """Return a valid default voice_id for a given language."""
     if _default_voice_cache.get(language):
         return _default_voice_cache[language]
 
     voices = get_available_voices()
 
-    # First try exact language match
+    logger.debug("Searching for default voice for language=%s", language)
+
+    # First try exact match
     for v in voices:
         locale = getattr(v, "locale", None)
         if locale and locale.startswith(language):
+            logger.info("Found default voice %s for %s", v.voice_id, language)
             _default_voice_cache[language] = v.voice_id
             return v.voice_id
 
-    # Fallback to Hindi (hi-IN) if nothing found
+    # Fallback to Hindi
     for v in voices:
         locale = getattr(v, "locale", "")
         if locale.startswith("hi-IN"):
+            logger.warning("No match found for %s. Falling back to Hindi voice=%s", language, v.voice_id)
             _default_voice_cache[language] = v.voice_id
             return v.voice_id
 
-    raise RuntimeError(f"No valid voice found for {language} and fallback failed")
+    logger.error("No valid voice found for %s and fallback failed", language)
+    raise RuntimeError(f"No valid voice found for {language}")
+
+
 # -----------------------
 # Audio Conversion Helpers
 # -----------------------
 def _pcm_to_wav_bytes(pcm_bytes, sample_rate=16000, sample_width=2, channels=1):
+    logger.debug("Converting PCM to WAV: %d bytes", len(pcm_bytes))
     buf = io.BytesIO()
     with wave.open(buf, 'wb') as wf:
         wf.setnchannels(channels)
@@ -115,58 +139,72 @@ def _pcm_to_wav_bytes(pcm_bytes, sample_rate=16000, sample_width=2, channels=1):
     buf.seek(0)
     return buf.read()
 
+
 def _try_convert_container_to_wav(blob_bytes):
     try:
         audio = AudioSegment.from_file(io.BytesIO(blob_bytes))
         out = io.BytesIO()
         audio.export(out, format="wav")
         out.seek(0)
+        logger.debug("Converted audio container to WAV: %d bytes", out.getbuffer().nbytes)
         return out.read()
     except Exception as e:
         logger.warning("Container conversion failed: %s", e)
         return None
 
+
 # -----------------------
 # Speech to Text (Murf)
 # -----------------------
 def speech_to_text_murf(audio_bytes, sample_rate=16000, language="hi-IN"):
+    logger.info("Starting STT with lang=%s, sample_rate=%s, bytes=%d", language, sample_rate, len(audio_bytes))
+
     if len(audio_bytes) >= 4 and audio_bytes[:4] == b'RIFF':
         wav_bytes = audio_bytes
+        logger.debug("Audio already in WAV format")
     else:
         wav_bytes = _try_convert_container_to_wav(audio_bytes)
         if wav_bytes is None:
+            logger.debug("Falling back to PCM → WAV conversion")
             wav_bytes = _pcm_to_wav_bytes(audio_bytes, sample_rate=sample_rate, sample_width=2, channels=1)
 
-    response = client.speech_to_text.transcribe(
-        audio=wav_bytes,
-        format="wav",
-        language=language
-    )
-    logger.info("STT: received %d bytes, sample_rate=%s, language=%s", len(audio_bytes), sample_rate, language)
-    return response.get("text", "")
+    try:
+        response = client.speech_to_text.transcribe(
+            audio=wav_bytes,
+            format="wav",
+            language=language
+        )
+        logger.info("STT response received. Extracted text length=%d", len(response.get("text", "")))
+        return response.get("text", "")
+    except Exception:
+        logger.exception("STT transcription failed")
+        raise
+
 
 # -----------------------
 # Translation (Murf)
 # -----------------------
 def translate_text_murf(text, target_language="es-ES"):
-    resp = client.text.translate(target_language=target_language, texts=[text])
-    translations = [item.get("translated_text", "") for item in resp.get("translations", [])]
-    return translations[0] if translations else ""
+    logger.info("Translating text to %s (input length=%d)", target_language, len(text))
+    try:
+        resp = client.text.translate(target_language=target_language, texts=[text])
+        translations = [item.get("translated_text", "") for item in resp.get("translations", [])]
+        translated = translations[0] if translations else ""
+        logger.info("Translation complete. Output length=%d", len(translated))
+        return translated
+    except Exception:
+        logger.exception("Translation failed")
+        raise
+
 
 # -----------------------
 # Text to Speech (Murf)
 # -----------------------
-import base64
-import logging
-import requests
-
-logger = logging.getLogger("murf_pipeline")
-
 def generate_speech_from_text(text, language="en-US", voice=None):
     if not voice:
         voice = get_default_voice(language)
 
-    logger.info("TTS start: lang=%s, voice=%s", language, voice)
+    logger.info("Starting TTS: lang=%s, voice=%s, text_length=%d", language, voice, len(text))
     response = None
     try:
         response = client.text_to_speech.generate(
@@ -175,15 +213,15 @@ def generate_speech_from_text(text, language="en-US", voice=None):
             format="MP3",
             sample_rate=44100.0,
         )
+        logger.info("TTS generation successful")
     except Exception:
         logger.exception("Murf TTS generate() failed")
         raise
 
-    # bytes directly
+    # Handle multiple response shapes
     if isinstance(response, (bytes, bytearray)):
         return bytes(response)
 
-    # dict with base64
     if isinstance(response, dict) and "audio" in response:
         audio_obj = response["audio"]
         if isinstance(audio_obj, dict) and "data" in audio_obj:
@@ -193,7 +231,6 @@ def generate_speech_from_text(text, language="en-US", voice=None):
                 logger.exception("Failed to base64 decode audio data")
                 raise
 
-    # SDK object variants
     for attr in ("content", "audio", "audio_bytes", "data", "encoded_audio"):
         if hasattr(response, attr):
             blob = getattr(response, attr)
@@ -204,7 +241,7 @@ def generate_speech_from_text(text, language="en-US", voice=None):
                     try:
                         return base64.b64decode(blob)
                     except Exception:
-                        logger.debug("Attribute %s not base64: %r", attr, blob[:50])
+                        logger.debug("Attribute %s not base64 decodable", attr)
                         continue
 
     if hasattr(response, "audio_file") and response.audio_file:
@@ -224,16 +261,21 @@ def generate_speech_from_text(text, language="en-US", voice=None):
 # Full pipeline: STT → Translate → TTS
 # -----------------------
 def process_audio_pipeline(audio_bytes, stt_lang="hi-IN", target_lang="es-ES", voice=None):
+    logger.info("Pipeline start: stt_lang=%s, target_lang=%s, audio_bytes=%d", stt_lang, target_lang, len(audio_bytes))
+
     recognized = speech_to_text_murf(audio_bytes, language=stt_lang)
     if not recognized:
+        logger.warning("Pipeline: no speech recognized")
         return None, None, None
 
     translated = translate_text_murf(recognized, target_language=target_lang)
     if not translated:
+        logger.warning("Pipeline: translation failed or empty")
         return recognized, None, None
 
     if not voice:
         voice = get_default_voice(target_lang)
 
     tts_bytes = generate_speech_from_text(translated, language=target_lang, voice=voice)
+    logger.info("Pipeline completed successfully")
     return recognized, translated, tts_bytes
