@@ -330,7 +330,7 @@ class RoomBotHandle:
                 try:
                     if publication.kind == rtc.TrackKind.KIND_AUDIO:  # 👈 only audio
                         self._lg.debug("[bot.on] subscribing to audio track of %s", participant.identity)
-                        await publication.subscribe()
+                        await publication.subscribed()
                     else:
                         self._lg.debug(
                             "[bot.on] ignoring non-audio track kind=%s from %s",
