@@ -302,7 +302,7 @@ class RoomBotHandle:
             self._lg.debug("[bot] connecting to LiveKit url=%s", self.url)
             await self._room.connect(self.url, 
             token,
-            options=rtc.RoomOptions(auto_subscribe=False) 
+            options=rtc.RoomOptions(auto_subscribe=True) 
             )
             self._lg.info("[bot] connected to room %s", getattr(self._room, "name", self.room_code))
         except Exception:
@@ -323,24 +323,6 @@ class RoomBotHandle:
                 pass
             self._room = None
             return
-        
-        @self._room.on("track_published")
-        def _on_track_published(publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-            async def handle():
-                try:
-                    if publication.kind == rtc.TrackKind.KIND_AUDIO:  # 👈 only audio
-                        self._lg.debug("[bot.on] subscribing to audio track of %s", participant.identity)
-                        await self._room.subscribe(publication)
-                    else:
-                        self._lg.debug(
-                            "[bot.on] ignoring non-audio track kind=%s from %s",
-                            publication.kind.name,  # logs "VIDEO" or "DATA"
-                            participant.identity,
-                        )
-                except Exception:
-                    self._lg.exception("[bot.on] exception in track_published handler")
-                
-            asyncio.create_task(handle())
 
         # hook: when audio track subscribed
         @self._room.on("track_subscribed")
