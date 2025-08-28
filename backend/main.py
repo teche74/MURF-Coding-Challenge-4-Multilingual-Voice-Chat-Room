@@ -843,6 +843,18 @@ ROOM_HTML = """
                     localVideoTrack = tracks.find(t => t.kind === Track.Kind.Video);
 
                     if (localAudioTrack) {
+                        localAudioTrack.on("volume", (vol) => {
+                            console.log("Mic volume:", vol);
+                        });
+
+                    // Attach locally so you can hear yourself
+                        const testAudio = document.createElement("audio");
+                        testAudio.autoplay = true;
+                        testAudio.playsInline = true;
+                        testAudio.muted = true; // prevent feedback
+                        localAudioTrack.attach(testAudio);
+                        document.body.appendChild(testAudio);
+
                         await room.localParticipant.publishTrack(localAudioTrack);
                         document.getElementById('muteBtn').disabled = false;
                         document.getElementById('unmuteBtn').disabled = false;
