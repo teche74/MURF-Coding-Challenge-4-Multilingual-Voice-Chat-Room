@@ -7,7 +7,7 @@ import base64
 import requests
 from dotenv import load_dotenv
 from murf import Murf
-from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+from transformers import pipeline
 import torch
 from io import BytesIO
 import numpy as np
@@ -66,7 +66,7 @@ LANGUAGE_CODE_MAP = {
 }
 
 
-ASR_MODEL = "openai/whisper-large-v3"
+asr_pipeline = pipeline("automatic-speech-recognition", model="openai/whisper-large-v3")
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 HF_API_URL = "https://api-inference.huggingface.co/models"
 
@@ -162,38 +162,11 @@ def speech_to_text(audio_bytes, sample_rate=16000, target_language="hi"):
             audio_bytes, sample_rate=sample_rate, sample_width=2, channels=1
         )
 
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-    files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-    payload = {
-        "parameters": {
-            "task": "transcribe",
-            "language": None,
-            "target_lang": target_language.split("-")[0] if target_language else "hi"
-        }
-    }
+    result = asr_pipeline(BytesIO(wav_bytes))
 
-    response = requests.post(
-        f"{HF_API_URL}/{ASR_MODEL}",
-        headers=headers,
-        files=files,
-        data={"json": json.dumps(payload)}
-    )
-
-    if response.status_code != 200:
-        logger.error("HF API failed [%d]: %s", response.status_code, response.text)
-        raise RuntimeError(f"Hugging Face API error: {response.text}")
-
-    try:
-        result = response.json()
-        if isinstance(result, dict) and "text" in result:
-            return result["text"]
-        if isinstance(result, list) and len(result) > 0 and "text" in result[0]:
-            return result[0]["text"]
-        logger.warning("Unexpected HF result: %s", result)
-        return ""
-    except Exception:
-        logger.exception("Failed to parse HF response")
-        raise
+    text = result.get("text", "").strip()
+    logger.info("STT result: %s", text)
+    return text
 
 
 
@@ -285,26 +258,3 @@ def generate_speech_from_text(text, language="en-US", voice=None):
     logger.error("Unsupported Murf TTS response: %r", response)
     raise RuntimeError("Unsupported Murf TTS response shape")
 
-
-# -----------------------
-# Full pipeline: STT → Translate → TTS
-# -----------------------
-def process_audio_pipeline(audio_bytes, stt_lang="hi-IN", target_lang="es-ES", voice=None):
-    logger.info("Pipeline start: stt_lang=%s, target_lang=%s, audio_bytes=%d", stt_lang, target_lang, len(audio_bytes))
-
-    recognized = speech_to_text(audio_bytes, language=stt_lang)
-    if not recognized:
-        logger.warning("Pipeline: no speech recognized")
-        return None, None, None
-
-    translated = translate_text_murf(recognized, target_language=target_lang)
-    if not translated:
-        logger.warning("Pipeline: translation failed or empty")
-        return recognized, None, None
-
-    if not voice:
-        voice = get_default_voice(target_lang)
-
-    tts_bytes = generate_speech_from_text(translated, language=target_lang, voice=voice)
-    logger.info("Pipeline completed successfully")
-    return recognized, translated, tts_bytes
