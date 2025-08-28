@@ -4,9 +4,14 @@ import wave
 import logging
 import base64
 import requests
-from pydub import AudioSegment
 from dotenv import load_dotenv
 from murf import Murf
+import whisper
+import soundfile as sf
+from io import BytesIO
+
+
+WHISPER_MODEL = whisper.load_model("large") 
 
 # -----------------------
 # Logging setup
@@ -59,6 +64,10 @@ LANGUAGE_CODE_MAP = {
     "Polish - Poland": "pl-PL",
     "Greek - Greece": "el-GR"
 }
+
+def resolve_language(user_choice: str, default="hi") -> str:
+    """Map user choice to STT-compatible language code."""
+    return LANGUAGE_CODE_MAP.get(user_choice, default)
 
 
 # -----------------------
@@ -125,60 +134,54 @@ def get_default_voice(language: str) -> str:
     raise RuntimeError(f"No valid voice found for {language}")
 
 
-# -----------------------
-# Audio Conversion Helpers
-# -----------------------
-def _pcm_to_wav_bytes(pcm_bytes, sample_rate=16000, sample_width=2, channels=1):
-    logger.debug("Converting PCM to WAV: %d bytes", len(pcm_bytes))
-    buf = io.BytesIO()
-    with wave.open(buf, 'wb') as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(sample_width)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm_bytes)
-    buf.seek(0)
-    return buf.read()
-
-
-def _try_convert_container_to_wav(blob_bytes):
-    try:
-        audio = AudioSegment.from_file(io.BytesIO(blob_bytes))
-        out = io.BytesIO()
-        audio.export(out, format="wav")
-        out.seek(0)
-        logger.debug("Converted audio container to WAV: %d bytes", out.getbuffer().nbytes)
-        return out.read()
-    except Exception as e:
-        logger.warning("Container conversion failed: %s", e)
-        return None
 
 
 # -----------------------
 # Speech to Text (Murf)
 # -----------------------
-def speech_to_text_murf(audio_bytes, sample_rate=16000, language="hi-IN"):
-    logger.info("Starting STT with lang=%s, sample_rate=%s, bytes=%d", language, sample_rate, len(audio_bytes))
 
+logger = logging.getLogger(__name__)
+
+def speech_to_text_whisper(audio_bytes, sample_rate=16000, language="hi"):
+    logger.info("Starting STT with lang=%s, sample_rate=%s, bytes=%d",
+                language, sample_rate, len(audio_bytes))
+    
+    language_code = resolve_language(language)
+
+    # --- Step 1: Ensure WAV format ---
     if len(audio_bytes) >= 4 and audio_bytes[:4] == b'RIFF':
         wav_bytes = audio_bytes
         logger.debug("Audio already in WAV format")
     else:
-        wav_bytes = _try_convert_container_to_wav(audio_bytes)
-        if wav_bytes is None:
-            logger.debug("Falling back to PCM → WAV conversion")
-            wav_bytes = _pcm_to_wav_bytes(audio_bytes, sample_rate=sample_rate, sample_width=2, channels=1)
+        logger.debug("Converting PCM → WAV")
+        wav_bytes = _pcm_to_wav_bytes(
+            audio_bytes, sample_rate=sample_rate, sample_width=2, channels=1
+        )
+
+    # --- Step 2: Decode wav_bytes into numpy array ---
+    with BytesIO(wav_bytes) as wav_io:
+        audio_data, sr = sf.read(wav_io, dtype="float32")
 
     try:
-        response = client.speech_to_text.transcribe(
-            audio=wav_bytes,
-            format="wav",
-            language=language
-        )
-        logger.info("STT response received. Extracted text length=%d", len(response.get("text", "")))
-        return response.get("text", "")
+        result = WHISPER_MODEL.transcribe(audio_data, language=language_code.split("-")[0])
+        text = result.get("text", "")
+        logger.info("STT response received. Extracted text length=%d", len(text))
+        return text
     except Exception:
-        logger.exception("STT transcription failed")
+        logger.exception("Local Whisper transcription failed")
         raise
+
+
+def _pcm_to_wav_bytes(pcm_bytes, sample_rate=16000, sample_width=2, channels=1):
+    """Wrap raw PCM16LE bytes in a WAV container."""
+    with BytesIO() as wav_io:
+        with wave.open(wav_io, "wb") as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(sample_width)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm_bytes)
+        return wav_io.getvalue()
+
 
 
 # -----------------------

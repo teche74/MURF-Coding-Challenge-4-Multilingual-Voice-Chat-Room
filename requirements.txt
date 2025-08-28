@@ -97,3 +97,5 @@ livekit-api
 livekit
 vosk
 livekit-agents
+whisper
+soundfile

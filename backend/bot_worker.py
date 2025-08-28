@@ -34,7 +34,7 @@ from pydub import AudioSegment
 
 # Your existing Murf helpers
 from backend.murf_api import (
-    speech_to_text_murf,
+    speech_to_text_whisper,
     translate_text_murf,
     generate_speech_from_text,
     get_default_voice,
@@ -224,7 +224,7 @@ class TranslatorAgent(Agent):
 
         try:
             logger.debug("[agent] calling STT for speaker=%s (lang=%s)", speaker_id, speaker_lang)
-            recognized = await asyncio.to_thread(speech_to_text_murf, pcm_bytes, sample_rate, speaker_lang)
+            recognized = await asyncio.to_thread(speech_to_text_whisper, pcm_bytes, sample_rate, speaker_lang)
             logger.info("[agent] STT result for %s: %r", speaker_id, recognized)
         except Exception:
             logger.exception("[agent] STT failed for speaker %s", speaker_id)
@@ -350,7 +350,8 @@ class RoomBotHandle:
         self._lg.info("[bot] started reader for participant %s", getattr(participant, "identity", "<unknown>"))
         buffer = bytearray()
         last_voice_time = time.time()
-        sample_rate = 16000
+        sample_rate = 48000
+        min_speech_bytes = int(sample_rate * 2 * 0.5)
 
         try:
             async for frame_event in stream:
@@ -378,7 +379,7 @@ class RoomBotHandle:
                     last_voice_time = time.time()
 
                 # End-of-turn check
-                if len(buffer) >= (sr * 2 * 1) or (time.time() - last_voice_time) > SILENCE_SECONDS_TO_END:
+                if (len(buffer) >= min_speech_bytes) or ((time.time() - last_voice_time) > SILENCE_SECONDS_TO_END and len(buffer) > 0):
                     pcm_snapshot = bytes(buffer)
                     buffer.clear()
 
