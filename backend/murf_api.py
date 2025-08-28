@@ -7,7 +7,6 @@ import base64
 import requests
 from dotenv import load_dotenv
 from murf import Murf
-from vosk import Model, KaldiRecognizer
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 import torch
 from io import BytesIO
