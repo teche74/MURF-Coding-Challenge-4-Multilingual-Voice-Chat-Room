@@ -34,7 +34,7 @@ from pydub import AudioSegment
 
 # Your existing Murf helpers
 from backend.murf_api import (
-    speech_to_text_whisper,
+    speech_to_text,
     translate_text_murf,
     generate_speech_from_text,
     get_default_voice,
@@ -224,7 +224,7 @@ class TranslatorAgent(Agent):
 
         try:
             logger.debug("[agent] calling STT for speaker=%s (lang=%s)", speaker_id, speaker_lang)
-            recognized = await asyncio.to_thread(speech_to_text_whisper, pcm_bytes, sample_rate, speaker_lang)
+            recognized = await asyncio.to_thread(speech_to_text, pcm_bytes, sample_rate, speaker_lang)
             logger.info("[agent] STT result for %s: %r", speaker_id, recognized)
         except Exception:
             logger.exception("[agent] STT failed for speaker %s", speaker_id)
