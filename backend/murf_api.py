@@ -66,32 +66,7 @@ LANGUAGE_CODE_MAP = {
 }
 
 
-MODEL_MAP = {
-    "en-US": ("whisper", "openai/whisper-small"),
-    "es-ES": ("whisper", "openai/whisper-small"),
-    "fr-FR": ("whisper", "openai/whisper-small"),
-    "de-DE": ("whisper", "openai/whisper-small"),
-    "it-IT": ("whisper", "openai/whisper-small"),
-    "nl-NL": ("whisper", "openai/whisper-small"),
-    "pt-BR": ("whisper", "openai/whisper-small"),
-    "zh-CN": ("whisper", "openai/whisper-small"),
-    "ja-JP": ("whisper", "openai/whisper-small"),
-    "ko-KR": ("whisper", "openai/whisper-small"),
-    "hi-IN": ("whisper", "openai/whisper-small"),
-    "pl-PL": ("whisper", "openai/whisper-small"),
-    "el-GR": ("whisper", "openai/whisper-small"),
-    "en-UK": ("whisper", "openai/whisper-small"),
-    "en-IN": ("whisper", "openai/whisper-small"),
-    "en-AU": ("whisper", "openai/whisper-small"),
-    "en-SCOTT": ("whisper", "openai/whisper-small"),
-    "es-MX": ("whisper", "openai/whisper-small"),
-
-    "ta-IN": ("wav2vec2", "ai4bharat/indicwav2vec-tam"),
-    "bn-IN": ("wav2vec2", "ai4bharat/indicwav2vec-ben"),
-    "hr-HR": ("wav2vec2", "facebook/wav2vec2-large-xlsr-53-fine-tuned-hr"),  
-    "sk-SK": ("wav2vec2", "facebook/wav2vec2-large-xlsr-53-fine-tuned-sk"),
-}
-
+ASR_MODEL = "openai/whisper-large-v3"
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 HF_API_URL = "https://api-inference.huggingface.co/models"
 
@@ -171,27 +146,41 @@ def get_default_voice(language: str) -> str:
 # Speech to Text (Mixed)
 # -----------------------
 
-def transcribe_with_hf(wav_bytes: bytes, model_id: str, language_code: str = None):
-    """
-    Call Hugging Face Inference API for ASR with optional language hint.
-    """
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
 
-    # Build payload: audio as binary, plus JSON params if language is provided
+def speech_to_text(audio_bytes, sample_rate=16000, target_language="hi"):
+    """
+    Use a single Whisper model for multilingual STT.
+    Auto-detects source language, outputs transcription in target language if set.
+    """
+    logger.info("Starting STT (target=%s, sample_rate=%s, bytes=%d)",
+                target_language, sample_rate, len(audio_bytes))
+
+    if len(audio_bytes) >= 4 and audio_bytes[:4] == b'RIFF':
+        wav_bytes = audio_bytes
+    else:
+        wav_bytes = _pcm_to_wav_bytes(
+            audio_bytes, sample_rate=sample_rate, sample_width=2, channels=1
+        )
+
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
     files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-    payload = {}
-    if language_code:
-        payload["parameters"] = {"language": language_code}
+    payload = {
+        "parameters": {
+            "task": "transcribe",
+            "language": None,
+            "target_lang": target_language.split("-")[0] if target_language else "hi"
+        }
+    }
 
     response = requests.post(
-        f"{HF_API_URL}/{model_id}",
+        f"{HF_API_URL}/{ASR_MODEL}",
         headers=headers,
         files=files,
-        data={"json": json.dumps(payload)} if payload else None,
+        data={"json": json.dumps(payload)}
     )
 
     if response.status_code != 200:
-        logger.error("HF API request failed [%d]: %s", response.status_code, response.text)
+        logger.error("HF API failed [%d]: %s", response.status_code, response.text)
         raise RuntimeError(f"Hugging Face API error: {response.text}")
 
     try:
@@ -200,49 +189,11 @@ def transcribe_with_hf(wav_bytes: bytes, model_id: str, language_code: str = Non
             return result["text"]
         if isinstance(result, list) and len(result) > 0 and "text" in result[0]:
             return result[0]["text"]
-        logger.warning("HF API returned unexpected format: %s", result)
+        logger.warning("Unexpected HF result: %s", result)
         return ""
     except Exception:
-        logger.exception("Failed to parse Hugging Face response")
+        logger.exception("Failed to parse HF response")
         raise
-
-
-def speech_to_text(audio_bytes, sample_rate=16000, language="hi-IN"):
-    logger.info("Starting STT with lang=%s, sample_rate=%s, bytes=%d",
-                language, sample_rate, len(audio_bytes))
-    
-    language_code = resolve_language(language, default="hi-IN")
-    logger.debug("Resolved language → %s", language_code)
-
-    if language_code not in MODEL_MAP:
-        raise ValueError(f"No model available for language {language_code}")
-    
-    backend, model_ref = MODEL_MAP[language_code]
-
-    # --- Step 1: Ensure WAV format ---
-    if len(audio_bytes) >= 4 and audio_bytes[:4] == b'RIFF':
-        wav_bytes = audio_bytes
-        logger.debug("Audio already in WAV format")
-    else:
-        logger.debug("Converting PCM → WAV")
-        wav_bytes = _pcm_to_wav_bytes(
-            audio_bytes, sample_rate=sample_rate, sample_width=2, channels=1
-        )
-
-    # --- Step 2: Use Hugging Face ---
-    if backend == "whisper":
-        # Whisper supports explicit language parameter
-        hf_lang = language_code.split("-")[0]   # e.g. "hi-IN" → "hi"
-        logger.debug("Using Whisper [%s] with language=%s", model_ref, hf_lang)
-        return transcribe_with_hf(wav_bytes, model_ref, language_code=hf_lang)
-
-    elif backend == "wav2vec2":
-        # Wav2Vec2 is language-specific (fine-tuned), no extra parameter
-        logger.debug("Using Wav2Vec2 [%s]", model_ref)
-        return transcribe_with_hf(wav_bytes, model_ref)
-
-    else:
-        raise ValueError(f"Unknown backend {backend} for {language_code}")
 
 
 
