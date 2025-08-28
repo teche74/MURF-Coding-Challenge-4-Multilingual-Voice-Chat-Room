@@ -356,7 +356,7 @@ class RoomBotHandle:
             async for frame_event in stream:
                 
                 audio_frame = frame_event.frame   
-                data = byte(audio_frame.data )
+                data = bytes(audio_frame.data )
                 sr = audio_frame.sample_rate or sample_rate
                 
                 if not isinstance(data, (bytes, bytearray)):
