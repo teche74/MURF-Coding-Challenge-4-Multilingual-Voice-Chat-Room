@@ -353,14 +353,12 @@ class RoomBotHandle:
         sample_rate = 16000
 
         try:
-            async for frame in stream:  # ✅ iterate over AudioStream, not track.read_audio_chunks()
-                try:
-                    data = frame.data.tobytes()
-                    sr = getattr(frame, "sample_rate", None) or sample_rate
-                except Exception:
-                    data = bytes(frame)
-                    sr = sample_rate
-
+            async for frame_event in stream:
+                
+                audio_frame = frame_event.frame   
+                data = audio_frame.data 
+                sr = audio_frame.sample_rate or sample_rate
+                
                 if not isinstance(data, (bytes, bytearray)):
                     self._lg.warning("[bot.read] received non-bytes data (type=%s) - skipping", type(data))
                     continue
