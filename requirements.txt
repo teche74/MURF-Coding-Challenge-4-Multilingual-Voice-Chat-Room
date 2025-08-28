@@ -97,5 +97,6 @@ livekit-api
 livekit
 vosk
 livekit-agents
-whisper
+openai-whisper
 soundfile
+setuptools-rust
