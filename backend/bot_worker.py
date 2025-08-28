@@ -27,6 +27,7 @@ from livekit.agents.voice import Agent, AgentSession
 from livekit import rtc
 from livekit.api import AccessToken, VideoGrants
 from livekit.rtc.audio_frame import AudioFrame
+from livekit.rtc import AudioStream
 
 # audio helpers
 from pydub import AudioSegment
@@ -334,9 +335,9 @@ class RoomBotHandle:
                         return
 
                     self._lg.info("[bot.on] audio track subscribed from %s", participant.identity)
-
+                    stream = AudioStream(track)
                     # Use the silence-based reader loop
-                    asyncio.create_task(self._read_track_loop(track, participant))
+                    asyncio.create_task(self._read_track_loop(stream, participant))
 
                 except Exception:
                     self._lg.exception("[bot.on] exception in track_subscribed handler")
@@ -344,56 +345,59 @@ class RoomBotHandle:
             asyncio.create_task(handle())
 
     
-    async def _read_track_loop(self, track, participant):
-        """Read audio chunks from a subscribed track and detect end-of-turn via simple silence-based logic."""
+    async def _read_track_loop(self, stream: AudioStream, participant):
+        """Read audio frames from a subscribed track and detect end-of-turn via simple silence-based logic."""
         self._lg.info("[bot] started reader for participant %s", getattr(participant, "identity", "<unknown>"))
         buffer = bytearray()
         last_voice_time = time.time()
         sample_rate = 16000
 
         try:
-            async for chunk in track.read_audio_chunks():
+            async for frame in stream:  # ✅ iterate over AudioStream, not track.read_audio_chunks()
                 try:
-                    data = chunk.data.tobytes()
-                    sr = getattr(chunk, "sample_rate", None) or sample_rate
+                    data = frame.data.tobytes()
+                    sr = getattr(frame, "sample_rate", None) or sample_rate
                 except Exception:
-                    # if track yields raw bytes directly
-                    data = bytes(chunk)
+                    data = bytes(frame)
                     sr = sample_rate
 
-                # defensive: ensure data is bytes
                 if not isinstance(data, (bytes, bytearray)):
                     self._lg.warning("[bot.read] received non-bytes data (type=%s) - skipping", type(data))
                     continue
 
                 buffer.extend(data)
-                # compute rms of last 200ms of buffer to check voice
-                window_bytes = buffer[-(int(0.2 * sr) * 2) :]
+
+                # compute rms of last 200ms of buffer
+                window_bytes = buffer[-(int(0.2 * sr) * 2):]
                 rms = _rms_of_pcm16(bytes(window_bytes))
 
-                self._lg.debug("[bot.read] frame received participant=%s sr=%s chunk_len=%d buffer_len=%d rms=%.2f",
-                               getattr(participant, 'identity', None), sr, len(data), len(buffer), rms)
+                self._lg.debug(
+                    "[bot.read] frame received participant=%s sr=%s chunk_len=%d buffer_len=%d rms=%.2f",
+                    getattr(participant, 'identity', None), sr, len(data), len(buffer), rms
+                )
 
                 if rms > SILENCE_THRESHOLD:
                     last_voice_time = time.time()
 
-                # If buffer large enough or silence timeout reached, treat as end-of-turn and send for processing
+                # End-of-turn check
                 if len(buffer) >= (sr * 2 * 1) or (time.time() - last_voice_time) > SILENCE_SECONDS_TO_END:
                     pcm_snapshot = bytes(buffer)
                     buffer.clear()
 
-                    self._lg.debug("[bot.read] silence detected or max buffer reached, snapshot_len=%d, sending to STT", len(pcm_snapshot))
-                    # only process if snapshot is reasonably large
+                    self._lg.debug(
+                        "[bot.read] silence detected or max buffer reached, snapshot_len=%d, sending to STT",
+                        len(pcm_snapshot)
+                    )
+
                     if len(pcm_snapshot) < MIN_SPEECH_BYTES:
                         self._lg.debug("[bot.read] snapshot too small (%d < %d) - ignoring", len(pcm_snapshot), MIN_SPEECH_BYTES)
                         continue
 
-                    # run processing but don't block reader loop
                     asyncio.create_task(self._process_speech_chunk(pcm_snapshot, sr, participant.identity))
 
         except Exception:
             self._lg.exception("[bot] read loop failed for participant %s", getattr(participant, "identity", "<unknown>"))
-
+    
     async def _process_speech_chunk(self, pcm_bytes: bytes, sample_rate: int, speaker_id: str):
         # delegate to agent handler
         self._lg.debug("[bot.proc] _process_speech_chunk called speaker=%s bytes=%d sample_rate=%s", speaker_id, len(pcm_bytes) if pcm_bytes else 0, sample_rate)
