@@ -1,3 +1,4 @@
+import json
 import os
 import io
 import wave
@@ -6,12 +7,12 @@ import base64
 import requests
 from dotenv import load_dotenv
 from murf import Murf
-import whisper
-import soundfile as sf
+from vosk import Model, KaldiRecognizer
+from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+import torch
 from io import BytesIO
+import numpy as np
 
-
-WHISPER_MODEL = whisper.load_model("large") 
 
 # -----------------------
 # Logging setup
@@ -65,7 +66,38 @@ LANGUAGE_CODE_MAP = {
     "Greek - Greece": "el-GR"
 }
 
-def resolve_language(user_choice: str, default="hi") -> str:
+
+MODEL_MAP = {
+    "en-US": ("whisper", "openai/whisper-small"),
+    "es-ES": ("whisper", "openai/whisper-small"),
+    "fr-FR": ("whisper", "openai/whisper-small"),
+    "de-DE": ("whisper", "openai/whisper-small"),
+    "it-IT": ("whisper", "openai/whisper-small"),
+    "nl-NL": ("whisper", "openai/whisper-small"),
+    "pt-BR": ("whisper", "openai/whisper-small"),
+    "zh-CN": ("whisper", "openai/whisper-small"),
+    "ja-JP": ("whisper", "openai/whisper-small"),
+    "ko-KR": ("whisper", "openai/whisper-small"),
+    "hi-IN": ("whisper", "openai/whisper-small"),
+    "pl-PL": ("whisper", "openai/whisper-small"),
+    "el-GR": ("whisper", "openai/whisper-small"),
+    "en-UK": ("whisper", "openai/whisper-small"),
+    "en-IN": ("whisper", "openai/whisper-small"),
+    "en-AU": ("whisper", "openai/whisper-small"),
+    "en-SCOTT": ("whisper", "openai/whisper-small"),
+    "es-MX": ("whisper", "openai/whisper-small"),
+
+    "ta-IN": ("wav2vec2", "ai4bharat/indicwav2vec-tam"),
+    "bn-IN": ("wav2vec2", "ai4bharat/indicwav2vec-ben"),
+    "hr-HR": ("wav2vec2", "facebook/wav2vec2-large-xlsr-53-fine-tuned-hr"),  
+    "sk-SK": ("wav2vec2", "facebook/wav2vec2-large-xlsr-53-fine-tuned-sk"),
+}
+
+HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+HF_API_URL = "https://api-inference.huggingface.co/models"
+
+
+def resolve_language(user_choice: str, default="hi-IN") -> str:
     """Map user choice to STT-compatible language code."""
     return LANGUAGE_CODE_MAP.get(user_choice, default)
 
@@ -137,16 +169,56 @@ def get_default_voice(language: str) -> str:
 
 
 # -----------------------
-# Speech to Text (Murf)
+# Speech to Text (Mixed)
 # -----------------------
 
-logger = logging.getLogger(__name__)
+def transcribe_with_hf(wav_bytes: bytes, model_id: str, language_code: str = None):
+    """
+    Call Hugging Face Inference API for ASR with optional language hint.
+    """
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
 
-def speech_to_text_whisper(audio_bytes, sample_rate=16000, language="hi"):
+    # Build payload: audio as binary, plus JSON params if language is provided
+    files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
+    payload = {}
+    if language_code:
+        payload["parameters"] = {"language": language_code}
+
+    response = requests.post(
+        f"{HF_API_URL}/{model_id}",
+        headers=headers,
+        files=files,
+        data={"json": json.dumps(payload)} if payload else None,
+    )
+
+    if response.status_code != 200:
+        logger.error("HF API request failed [%d]: %s", response.status_code, response.text)
+        raise RuntimeError(f"Hugging Face API error: {response.text}")
+
+    try:
+        result = response.json()
+        if isinstance(result, dict) and "text" in result:
+            return result["text"]
+        if isinstance(result, list) and len(result) > 0 and "text" in result[0]:
+            return result[0]["text"]
+        logger.warning("HF API returned unexpected format: %s", result)
+        return ""
+    except Exception:
+        logger.exception("Failed to parse Hugging Face response")
+        raise
+
+
+def speech_to_text(audio_bytes, sample_rate=16000, language="hi-IN"):
     logger.info("Starting STT with lang=%s, sample_rate=%s, bytes=%d",
                 language, sample_rate, len(audio_bytes))
     
-    language_code = resolve_language(language)
+    language_code = resolve_language(language, default="hi-IN")
+    logger.debug("Resolved language → %s", language_code)
+
+    if language_code not in MODEL_MAP:
+        raise ValueError(f"No model available for language {language_code}")
+    
+    backend, model_ref = MODEL_MAP[language_code]
 
     # --- Step 1: Ensure WAV format ---
     if len(audio_bytes) >= 4 and audio_bytes[:4] == b'RIFF':
@@ -158,18 +230,22 @@ def speech_to_text_whisper(audio_bytes, sample_rate=16000, language="hi"):
             audio_bytes, sample_rate=sample_rate, sample_width=2, channels=1
         )
 
-    # --- Step 2: Decode wav_bytes into numpy array ---
-    with BytesIO(wav_bytes) as wav_io:
-        audio_data, sr = sf.read(wav_io, dtype="float32")
+    # --- Step 2: Use Hugging Face ---
+    if backend == "whisper":
+        # Whisper supports explicit language parameter
+        hf_lang = language_code.split("-")[0]   # e.g. "hi-IN" → "hi"
+        logger.debug("Using Whisper [%s] with language=%s", model_ref, hf_lang)
+        return transcribe_with_hf(wav_bytes, model_ref, language_code=hf_lang)
 
-    try:
-        result = WHISPER_MODEL.transcribe(audio_data, language=language_code.split("-")[0])
-        text = result.get("text", "")
-        logger.info("STT response received. Extracted text length=%d", len(text))
-        return text
-    except Exception:
-        logger.exception("Local Whisper transcription failed")
-        raise
+    elif backend == "wav2vec2":
+        # Wav2Vec2 is language-specific (fine-tuned), no extra parameter
+        logger.debug("Using Wav2Vec2 [%s]", model_ref)
+        return transcribe_with_hf(wav_bytes, model_ref)
+
+    else:
+        raise ValueError(f"Unknown backend {backend} for {language_code}")
+
+
 
 
 def _pcm_to_wav_bytes(pcm_bytes, sample_rate=16000, sample_width=2, channels=1):
@@ -266,7 +342,7 @@ def generate_speech_from_text(text, language="en-US", voice=None):
 def process_audio_pipeline(audio_bytes, stt_lang="hi-IN", target_lang="es-ES", voice=None):
     logger.info("Pipeline start: stt_lang=%s, target_lang=%s, audio_bytes=%d", stt_lang, target_lang, len(audio_bytes))
 
-    recognized = speech_to_text_murf(audio_bytes, language=stt_lang)
+    recognized = speech_to_text(audio_bytes, language=stt_lang)
     if not recognized:
         logger.warning("Pipeline: no speech recognized")
         return None, None, None
