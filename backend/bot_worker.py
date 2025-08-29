@@ -1,17 +1,3 @@
-"""
-Improved LiveKit Translator bot worker (backend/bot_worker.py).
-
-This variant includes comprehensive end-to-end logging to aid debugging.
-
-Key features:
-- Detailed DEBUG logs at every major step, including token minting, LiveKit connect, AgentSession start,
-  track subscription, audio chunk reception, RMS values, STT/Translate/TTS steps and frame streaming.
-- Contextual child loggers per room/bot identity to filter logs per-room easily.
-- Safeguards: MIN_SPEECH_BYTES check before STT, try/except around likely failure points.
-
-Drop this file into your `backend/` folder replacing the previous worker file.
-"""
-
 import asyncio
 import io
 import logging
@@ -22,17 +8,14 @@ from typing import Dict, Optional, List
 
 from dotenv import load_dotenv
 
-# LiveKit imports
 from livekit.agents.voice import Agent, AgentSession
 from livekit import rtc
 from livekit.api import AccessToken, VideoGrants
 from livekit.rtc.audio_frame import AudioFrame
 from livekit.rtc import AudioStream
-
-# audio helpers
+import numpy as np
 from pydub import AudioSegment
 
-# Your existing Murf helpers
 from backend.murf_api import (
     speech_to_text,
     translate_text_murf,
@@ -40,11 +23,8 @@ from backend.murf_api import (
     get_default_voice,
 )
 
-# --------------------------
-# logging setup (verbose by default for debugging)
-# --------------------------
 logger = logging.getLogger("bot")
-# attach a stream handler if none exists so logs appear in stdout when run under uvicorn etc.
+
 if not logger.handlers:
     ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
@@ -61,17 +41,14 @@ LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 
-# tuneables
-SILENCE_THRESHOLD = 100  # RMS threshold for silence detection (tune for your audio)
-SILENCE_SECONDS_TO_END = 0.5  # how long silence to wait before treating as end-of-turn
-MIN_SPEECH_BYTES = 16000 * 2 // 5  # ~0.2s of 16kHz 16-bit mono
-MAX_CONCURRENT_TTS = 3  # limit concurrent TTS calls to avoid API throttling
-FRAME_MS = 20  # output TTS frame size when streaming back into LiveKit
 
 
-# --------------------------
-# helpers
-# --------------------------
+SILENCE_THRESHOLD = 100  
+SILENCE_SECONDS_TO_END = 0.5  
+MIN_SPEECH_BYTES = 16000 * 2 // 5  
+MAX_CONCURRENT_TTS = 3  
+FRAME_MS = 20  
+
 
 def _rms_of_pcm16(pcm_bytes: bytes) -> float:
     """Compute a quick RMS of int16 PCM bytes."""
@@ -84,7 +61,6 @@ def _rms_of_pcm16(pcm_bytes: bytes) -> float:
     try:
         samples = struct.unpack(fmt, pcm_bytes[: count * 2])
     except Exception:
-        # fallback to simple loop
         sm = 0
         for i in range(0, len(pcm_bytes) - 1, 2):
             s = int.from_bytes(pcm_bytes[i : i + 2], "little", signed=True)
@@ -95,15 +71,29 @@ def _rms_of_pcm16(pcm_bytes: bytes) -> float:
         sm += s * s
     return (sm / count) ** 0.5
 
+def ensure_wav_bytes(pcm_bytes: bytes, sample_rate: int) -> bytes:
+    if sample_rate == 48000 and len(pcm_bytes) % 4 == 0:
+        arr = np.frombuffer(pcm_bytes, dtype=np.float32)
+        arr = np.clip(arr, -1.0, 1.0)
+        arr = (arr * 32767).astype(np.int16)  
+        pcm_bytes = arr.tobytes()
+        sample_rate = 48000
+
+    audio = AudioSegment(
+        data=pcm_bytes,
+        sample_width=2,   
+        frame_rate=sample_rate,
+        channels=1
+    )
+    audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+
+    buf = io.BytesIO()
+    audio.export(buf, format="wav")
+    return buf.getvalue()
 
 async def _bytes_to_audio_frames_async(audio_bytes: bytes, sample_rate: int = 44100, channels: int = 1, frame_ms: int = FRAME_MS):
-    """Async generator that yields livekit.rtc.AudioFrame objects from encoded audio bytes (mp3/wav/etc.).
-
-    Note: uses pydub to decode the container. pydub requires ffmpeg in PATH.
-    """
     logger.debug("[tts.frames] starting decode: bytes=%d, sample_rate=%s, channels=%s, frame_ms=%s",
                  len(audio_bytes) if audio_bytes else 0, sample_rate, channels, frame_ms)
-    # decode to PCM using pydub
     try:
         audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
     except Exception as e:
@@ -134,19 +124,14 @@ async def _bytes_to_audio_frames_async(audio_bytes: bytes, sample_rate: int = 44
         logger.debug("[tts.frames] yielding frame %d (bytes=%d)", frame_count, len(chunk))
         yield frame
         idx += bytes_per_chunk
-        # give control back to loop
         await asyncio.sleep(0)
     logger.debug("[tts.frames] finished yielding %d frames", frame_count)
 
 
-# --------------------------
-# Agent that orchestrates translate/tts
-# --------------------------
 class TranslatorAgent(Agent):
     def __init__(self) -> None:
         super().__init__(instructions="You are a low-latency relay agent. Forward speech in each listener's language.")
         self.user_prefs: Dict[str, Dict[str, str]] = {}
-        # semaphore limits concurrent TTS tasks
         self._tts_sema = asyncio.Semaphore(MAX_CONCURRENT_TTS)
 
     async def on_enter(self):
@@ -181,7 +166,6 @@ class TranslatorAgent(Agent):
 
     async def _translate_and_play_for_target(self, recognized_text: str, from_lang: str, target_id: str, to_lang: str, voice: str):
         """Translate recognized_text to to_lang, synthesize audio and stream into session.say(audio=...)."""
-        # throttle concurrent TTS calls
         logger.debug("[agent] translate_and_play start: target=%s, to_lang=%s, voice=%s", target_id, to_lang, voice)
         async with self._tts_sema:
             try:
@@ -217,14 +201,13 @@ class TranslatorAgent(Agent):
         speaker_pref = self.user_prefs.get(speaker_id, {"language": "hi-IN", "voice": get_default_voice("hi-IN")})
         speaker_lang = speaker_pref.get("language", "en-US")
 
-        # ensure chunk meets minimum size expectation
         if len(pcm_bytes) < MIN_SPEECH_BYTES:
             logger.debug("[agent] pcm_bytes too small (%d < %d) - skipping STT", len(pcm_bytes), MIN_SPEECH_BYTES)
             return
 
         try:
             logger.debug("[agent] calling STT for speaker=%s (lang=%s)", speaker_id, speaker_lang)
-            recognized = await asyncio.to_thread(speech_to_text, pcm_bytes, sample_rate, speaker_lang)
+            recognized = await asyncio.to_thread(speech_to_text, pcm_bytes, 16000, speaker_lang)
             logger.info("[agent] STT result for %s: %r", speaker_id, recognized)
         except Exception:
             logger.exception("[agent] STT failed for speaker %s", speaker_id)
@@ -249,9 +232,6 @@ class TranslatorAgent(Agent):
             logger.debug("[agent] translation tasks completed for speaker=%s", speaker_id)
 
 
-# --------------------------
-# RoomBotHandle - lifecycle & track reader
-# --------------------------
 class RoomBotHandle:
     def __init__(self, room_code: str, url: str, api_key: str, api_secret: str):
         self.room_code = room_code
@@ -261,7 +241,6 @@ class RoomBotHandle:
         self._agent = TranslatorAgent()
         self._session = AgentSession()
         self.identity = f"bot_{room_code}"
-        # create a child logger for contextual logs per-room/bot
         self._lg = logger.getChild(self.identity)
         self._room: Optional[rtc.Room] = None
         self._tasks: List[asyncio.Task] = []
@@ -297,7 +276,6 @@ class RoomBotHandle:
             self._lg.exception("[bot] token minting failed for room %s", self.room_code)
             return
 
-        # create & connect room
         self._room = rtc.Room()
         try:
             self._lg.debug("[bot] connecting to LiveKit url=%s", self.url)
@@ -311,7 +289,6 @@ class RoomBotHandle:
             self._room = None
             return
 
-        # start agent session with room so RoomIO is created
         try:
             self._lg.debug("[bot] starting AgentSession")
             await self._session.start(agent=self._agent, room=self._room)
@@ -325,7 +302,6 @@ class RoomBotHandle:
             self._room = None
             return
 
-        # hook: when audio track subscribed
         @self._room.on("track_subscribed")
         def _on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
             async def handle():
@@ -336,7 +312,6 @@ class RoomBotHandle:
 
                     self._lg.info("[bot.on] audio track subscribed from %s", participant.identity)
                     stream = AudioStream(track)
-                    # Use the silence-based reader loop
                     asyncio.create_task(self._read_track_loop(stream, participant))
 
                 except Exception:
@@ -366,7 +341,6 @@ class RoomBotHandle:
 
                 buffer.extend(data)
 
-                # compute rms of last 200ms of buffer
                 window_bytes = buffer[-(int(0.2 * sr) * 2):]
                 rms = _rms_of_pcm16(bytes(window_bytes))
 
@@ -378,7 +352,6 @@ class RoomBotHandle:
                 if rms > SILENCE_THRESHOLD:
                     last_voice_time = time.time()
 
-                # End-of-turn check
                 if (len(buffer) >= min_speech_bytes) or ((time.time() - last_voice_time) > SILENCE_SECONDS_TO_END and len(buffer) > 0):
                     pcm_snapshot = bytes(buffer)
                     buffer.clear()
@@ -398,10 +371,10 @@ class RoomBotHandle:
             self._lg.exception("[bot] read loop failed for participant %s", getattr(participant, "identity", "<unknown>"))
     
     async def _process_speech_chunk(self, pcm_bytes: bytes, sample_rate: int, speaker_id: str):
-        # delegate to agent handler
         self._lg.debug("[bot.proc] _process_speech_chunk called speaker=%s bytes=%d sample_rate=%s", speaker_id, len(pcm_bytes) if pcm_bytes else 0, sample_rate)
         try:
-            await self._agent.handle_speech_chunk(pcm_bytes, sample_rate, speaker_id)
+            wav_bytes = ensure_wav_bytes(pcm_bytes, sample_rate)
+            await self._agent.handle_speech_chunk(wav_bytes, 16000, speaker_id)
             self._lg.debug("[bot.proc] agent.handle_speech_chunk completed for %s", speaker_id)
         except Exception:
             self._lg.exception("[bot] processing speech chunk failed for %s", speaker_id)
@@ -425,7 +398,6 @@ class RoomBotHandle:
                 self._lg.exception("[bot] closing room failed")
             self._room = None
 
-        # cancel background tasks
         for t in self._tasks:
             if not t.done():
                 try:
@@ -436,7 +408,6 @@ class RoomBotHandle:
         self._lg.info("[bot] stopped cleanup complete for room %s", self.room_code)
 
     async def set_user_pref(self, user_id: str, language: str, voice: Optional[str] = None):
-        # update in agent
         try:
             self._lg.debug("[bot] set_user_pref called: %s %s %s", user_id, language, voice)
             await self._agent.set_user_pref(user_id, language, voice)
@@ -445,9 +416,6 @@ class RoomBotHandle:
             self._lg.exception("[bot] set_user_pref failed for %s", user_id)
 
 
-# --------------------------
-# module-level helpers used by your FastAPI backend
-# --------------------------
 _bots: Dict[str, RoomBotHandle] = {}
 
 
@@ -461,7 +429,6 @@ async def ensure_room_bot(room_code: str, url: str, api_key: str, api_secret: st
     bot = RoomBotHandle(room_code, url, api_key, api_secret)
     _bots[room_code] = bot
     logger.info("ensure_room_bot: created bot handle for %s", room_code)
-    # start as background task and log exceptions
     async def _starter():
         try:
             logger.debug("_starter: starting bot.start() for %s", room_code)
