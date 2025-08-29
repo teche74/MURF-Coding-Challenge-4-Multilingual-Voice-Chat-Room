@@ -7,36 +7,25 @@ import base64
 import requests
 from dotenv import load_dotenv
 from murf import Murf
-from transformers import pipeline
-import torch
 from io import BytesIO
 import numpy as np
 
-
-# -----------------------
-# Logging setup
-# -----------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s"
 )
 logger = logging.getLogger("murf_pipeline")
 
-# -----------------------
-# Load API key
-# -----------------------
 load_dotenv()
 MURF_API_KEY = os.getenv("MURF_API_KEY")
 if not MURF_API_KEY:
     logger.error("MURF_API_KEY not found in environment")
     raise RuntimeError("Please set MURF_API_KEY in your .env file or environment variables.")
 
-# Init Murf client
 logger.info("Initializing Murf client...")
 client = Murf(api_key=MURF_API_KEY)
 logger.info("Murf client initialized successfully")
 
-# Cache for voices
 _voice_cache = None
 _default_voice_cache = {}
 
@@ -66,7 +55,7 @@ LANGUAGE_CODE_MAP = {
 }
 
 
-asr_pipeline = pipeline("automatic-speech-recognition", model="openai/whisper-large-v3")
+HADRA_API_URL = os.getenv("HADRA_API_URL")
 HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 HF_API_URL = "https://api-inference.huggingface.co/models"
 
@@ -75,10 +64,6 @@ def resolve_language(user_choice: str, default="hi-IN") -> str:
     """Map user choice to STT-compatible language code."""
     return LANGUAGE_CODE_MAP.get(user_choice, default)
 
-
-# -----------------------
-# Helpers
-# -----------------------
 def normalize_language(code: str) -> str:
     """Convert human language string or shorthand to Murf locale."""
     if not code:
@@ -94,9 +79,6 @@ def normalize_language(code: str) -> str:
     return "hi-IN"
 
 
-# -----------------------
-# Voice helpers
-# -----------------------
 def get_available_voices(force_refresh: bool = False):
     """Fetch all voices from Murf API (cached by default)."""
     global _voice_cache
@@ -120,7 +102,6 @@ def get_default_voice(language: str) -> str:
 
     logger.debug("Searching for default voice for language=%s", language)
 
-    # First try exact match
     for v in voices:
         locale = getattr(v, "locale", None)
         if locale and locale.startswith(language):
@@ -128,7 +109,6 @@ def get_default_voice(language: str) -> str:
             _default_voice_cache[language] = v.voice_id
             return v.voice_id
 
-    # Fallback to Hindi
     for v in voices:
         locale = getattr(v, "locale", "")
         if locale.startswith("hi-IN"):
@@ -140,11 +120,6 @@ def get_default_voice(language: str) -> str:
     raise RuntimeError(f"No valid voice found for {language}")
 
 
-
-
-# -----------------------
-# Speech to Text (Mixed)
-# -----------------------
 
 
 def speech_to_text(audio_bytes, sample_rate=16000, target_language="hi"):
@@ -162,11 +137,17 @@ def speech_to_text(audio_bytes, sample_rate=16000, target_language="hi"):
             audio_bytes, sample_rate=sample_rate, sample_width=2, channels=1
         )
 
-    result = asr_pipeline(BytesIO(wav_bytes))
-
-    text = result.get("text", "").strip()
-    logger.info("STT result: %s", text)
-    return text
+    files = {"file": ("audio.wav", BytesIO(wav_bytes), "audio/wav")}
+    try:
+        response = requests.post(HADRA_API_URL, files=files, timeout=60)
+        response.raise_for_status()
+        result = response.json()
+        text = result.get("text", "").strip()
+        logger.info("STT result: %s", text)
+        return text
+    except Exception as e:
+        logger.exception("STT API call failed: %s", str(e))
+        return ""
 
 
 
@@ -183,10 +164,7 @@ def _pcm_to_wav_bytes(pcm_bytes, sample_rate=16000, sample_width=2, channels=1):
 
 
 
-# -----------------------
-# Translation (Murf)
-# -----------------------
-def translate_text_murf(text, target_language="es-ES"):
+def translate_text_murf(text, target_language="hi-IN"):
     logger.info("Translating text to %s (input length=%d)", target_language, len(text))
     try:
         resp = client.text.translate(target_language=target_language, texts=[text])
@@ -199,9 +177,6 @@ def translate_text_murf(text, target_language="es-ES"):
         raise
 
 
-# -----------------------
-# Text to Speech (Murf)
-# -----------------------
 def generate_speech_from_text(text, language="en-US", voice=None):
     if not voice:
         voice = get_default_voice(language)
@@ -220,7 +195,6 @@ def generate_speech_from_text(text, language="en-US", voice=None):
         logger.exception("Murf TTS generate() failed")
         raise
 
-    # Handle multiple response shapes
     if isinstance(response, (bytes, bytearray)):
         return bytes(response)
 
