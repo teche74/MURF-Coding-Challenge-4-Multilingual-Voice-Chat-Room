@@ -1,22 +1,18 @@
-import json
 import os
-import io
-import wave
 import logging
 import base64
 import requests
 from dotenv import load_dotenv
 from murf import Murf
-from io import BytesIO
-import numpy as np
 
+logger = logging.getLogger("murf_pipeline")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s"
 )
-logger = logging.getLogger("murf_pipeline")
 
 load_dotenv()
+
 MURF_API_KEY = os.getenv("MURF_API_KEY")
 if not MURF_API_KEY:
     logger.error("MURF_API_KEY not found in environment")
@@ -55,14 +51,10 @@ LANGUAGE_CODE_MAP = {
 }
 
 
-HADRA_API_URL = os.getenv("HADRA_API_URL")
-HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-HF_API_URL = "https://api-inference.huggingface.co/models"
-
-
 def resolve_language(user_choice: str, default="hi-IN") -> str:
-    """Map user choice to STT-compatible language code."""
+    """Map user choice to STT/TTS-compatible language code."""
     return LANGUAGE_CODE_MAP.get(user_choice, default)
+
 
 def normalize_language(code: str) -> str:
     """Convert human language string or shorthand to Murf locale."""
@@ -70,10 +62,8 @@ def normalize_language(code: str) -> str:
         logger.warning("No language code provided. Defaulting to hi-IN")
         return "hi-IN"
     if code in LANGUAGE_CODE_MAP:
-        logger.debug("Normalized %s -> %s", code, LANGUAGE_CODE_MAP[code])
         return LANGUAGE_CODE_MAP[code]
     if "-" in code:
-        logger.debug("Using provided language code: %s", code)
         return code
     logger.warning("Unsupported language code '%s'. Defaulting to hi-IN", code)
     return "hi-IN"
@@ -83,7 +73,6 @@ def get_available_voices(force_refresh: bool = False):
     """Fetch all voices from Murf API (cached by default)."""
     global _voice_cache
     if _voice_cache is None or force_refresh:
-        logger.info("Fetching available voices from Murf API...")
         try:
             _voice_cache = client.text_to_speech.get_voices()
             logger.info("Retrieved %d voices from Murf API", len(_voice_cache))
@@ -100,12 +89,9 @@ def get_default_voice(language: str) -> str:
 
     voices = get_available_voices()
 
-    logger.debug("Searching for default voice for language=%s", language)
-
     for v in voices:
         locale = getattr(v, "locale", None)
         if locale and locale.startswith(language):
-            logger.info("Found default voice %s for %s", v.voice_id, language)
             _default_voice_cache[language] = v.voice_id
             return v.voice_id
 
@@ -120,69 +106,24 @@ def get_default_voice(language: str) -> str:
     raise RuntimeError(f"No valid voice found for {language}")
 
 
-
-
-def speech_to_text(audio_bytes, sample_rate=16000, target_language="hi"):
-    """
-    Use a single Whisper model for multilingual STT.
-    Auto-detects source language, outputs transcription in target language if set.
-    """
-    logger.info("Starting STT (target=%s, sample_rate=%s, bytes=%d)",
-                target_language, sample_rate, len(audio_bytes))
-
-    if len(audio_bytes) >= 4 and audio_bytes[:4] == b'RIFF':
-        wav_bytes = audio_bytes
-    else:
-        wav_bytes = _pcm_to_wav_bytes(
-            audio_bytes, sample_rate=sample_rate, sample_width=2, channels=1
-        )
-
-    files = {"file": ("audio.wav", BytesIO(wav_bytes), "audio/wav")}
-    try:
-        response = requests.post(HADRA_API_URL, files=files, timeout=60)
-        response.raise_for_status()
-        result = response.json()
-        text = result.get("text", "").strip()
-        logger.info("STT result: %s", text)
-        return text
-    except Exception as e:
-        logger.exception("STT API call failed: %s", str(e))
-        return ""
-
-
-
-
-def _pcm_to_wav_bytes(pcm_bytes, sample_rate=16000, sample_width=2, channels=1):
-    """Wrap raw PCM16LE bytes in a WAV container."""
-    with BytesIO() as wav_io:
-        with wave.open(wav_io, "wb") as wf:
-            wf.setnchannels(channels)
-            wf.setsampwidth(sample_width)
-            wf.setframerate(sample_rate)
-            wf.writeframes(pcm_bytes)
-        return wav_io.getvalue()
-
-
-
 def translate_text_murf(text, target_language="hi-IN"):
+    """Translate text via Murf API."""
     logger.info("Translating text to %s (input length=%d)", target_language, len(text))
     try:
         resp = client.text.translate(target_language=target_language, texts=[text])
         translations = [item.get("translated_text", "") for item in resp.get("translations", [])]
-        translated = translations[0] if translations else ""
-        logger.info("Translation complete. Output length=%d", len(translated))
-        return translated
+        return translations[0] if translations else ""
     except Exception:
         logger.exception("Translation failed")
         raise
 
 
-def generate_speech_from_text(text, language="en-US", voice=None):
+def generate_speech_from_text(text, language="hi-IN", voice=None):
+    """Generate TTS audio bytes via Murf API."""
     if not voice:
         voice = get_default_voice(language)
 
     logger.info("Starting TTS: lang=%s, voice=%s, text_length=%d", language, voice, len(text))
-    response = None
     try:
         response = client.text_to_speech.generate(
             text=text,
@@ -190,7 +131,6 @@ def generate_speech_from_text(text, language="en-US", voice=None):
             format="MP3",
             sample_rate=44100.0,
         )
-        logger.info("TTS generation successful")
     except Exception:
         logger.exception("Murf TTS generate() failed")
         raise
@@ -201,11 +141,7 @@ def generate_speech_from_text(text, language="en-US", voice=None):
     if isinstance(response, dict) and "audio" in response:
         audio_obj = response["audio"]
         if isinstance(audio_obj, dict) and "data" in audio_obj:
-            try:
-                return base64.b64decode(audio_obj["data"])
-            except Exception:
-                logger.exception("Failed to base64 decode audio data")
-                raise
+            return base64.b64decode(audio_obj["data"])
 
     for attr in ("content", "audio", "audio_bytes", "data", "encoded_audio"):
         if hasattr(response, attr):
@@ -217,18 +153,12 @@ def generate_speech_from_text(text, language="en-US", voice=None):
                     try:
                         return base64.b64decode(blob)
                     except Exception:
-                        logger.debug("Attribute %s not base64 decodable", attr)
                         continue
 
     if hasattr(response, "audio_file") and response.audio_file:
-        try:
-            r = requests.get(response.audio_file, timeout=10)
-            r.raise_for_status()
-            return r.content
-        except Exception:
-            logger.exception("Failed fetching audio from signed URL")
-            raise
+        r = requests.get(response.audio_file, timeout=10)
+        r.raise_for_status()
+        return r.content
 
     logger.error("Unsupported Murf TTS response: %r", response)
     raise RuntimeError("Unsupported Murf TTS response shape")
-
