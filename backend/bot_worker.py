@@ -164,9 +164,13 @@ class TranslatorAgent(Agent):
         self.user_prefs[user_id] = {"language": language, "voice": voice}
         logger.info(f"[agent] prefs set for {user_id} -> {language}, {voice}")
 
-    async def _translate_and_play_for_target(self, recognized_text: str, from_lang: str, target_id: str, to_lang: str, voice: str):
+    async def _translate_and_play_for_target(self, recognized_text: str, from_lang: str, target_id: str, to_lang: str, voice: str ,speaker_id : str):
         """Translate recognized_text to to_lang, synthesize audio and stream into session.say(audio=...)."""
         logger.debug("[agent] translate_and_play start: target=%s, to_lang=%s, voice=%s", target_id, to_lang, voice)
+
+        if target_id == speaker_id:
+            logger.debug("[agent] skipping playback to original speaker %s", speaker_id)
+            return
         async with self._tts_sema:
             try:
                 translated = await asyncio.to_thread(translate_text_murf, recognized_text, target_language=to_lang)
@@ -224,7 +228,7 @@ class TranslatorAgent(Agent):
             to_lang = pref.get("language", "hi-IN")
             voice = pref.get("voice") or get_default_voice(to_lang)
             logger.debug("[agent] queuing translation for target=%s to_lang=%s", target_id, to_lang)
-            tasks.append(asyncio.create_task(self._translate_and_play_for_target(recognized, speaker_lang, target_id, to_lang, voice)))
+            tasks.append(asyncio.create_task(self._translate_and_play_for_target(recognized, speaker_lang, target_id, to_lang, voice, speaker_id)))
 
         if tasks:
             logger.debug("[agent] awaiting %d translation tasks for speaker=%s", len(tasks), speaker_id)
