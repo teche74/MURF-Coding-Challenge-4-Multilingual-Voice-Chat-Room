@@ -330,7 +330,7 @@ class RoomBotHandle:
         buffer = bytearray()
         last_voice_time = time.time()
         sample_rate = 48000
-        min_speech_bytes = int(sample_rate * 2 * 0.5)
+        min_speech_bytes = int(sample_rate * 2 * 1)
 
         try:
             async for frame_event in stream:
@@ -356,7 +356,7 @@ class RoomBotHandle:
                 if rms > SILENCE_THRESHOLD:
                     last_voice_time = time.time()
 
-                if (len(buffer) >= min_speech_bytes) or ((time.time() - last_voice_time) > SILENCE_SECONDS_TO_END and len(buffer) > 0):
+                if (time.time() - last_voice_time) > SILENCE_SECONDS_TO_END and len(buffer) >= min_speech_bytes:
                     pcm_snapshot = bytes(buffer)
                     buffer.clear()
 
@@ -364,10 +364,6 @@ class RoomBotHandle:
                         "[bot.read] silence detected or max buffer reached, snapshot_len=%d, sending to STT",
                         len(pcm_snapshot)
                     )
-
-                    if len(pcm_snapshot) < MIN_SPEECH_BYTES:
-                        self._lg.debug("[bot.read] snapshot too small (%d < %d) - ignoring", len(pcm_snapshot), MIN_SPEECH_BYTES)
-                        continue
 
                     asyncio.create_task(self._process_speech_chunk(pcm_snapshot, sr, participant.identity))
 
